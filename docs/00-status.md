@@ -4,15 +4,34 @@
 
 ## 1. 완료한 것
 
-**저장소 골격 + 제어면 + 모델 슬롯 정본.** 아래 4개가 전부 실제로 돈다.
+**저장소 골격 + 제어면 + 모델 슬롯 정본 + P0-1.**
 
 ```
 uv sync                              pydantic 2.13.3 핀 설치 완료
-uv run pytest -q                     21 passed  (tests/models/test_registry.py)
+uv run pytest -q                     91 passed  (계약 70 + 레지스트리 21)
 uv run ruff check .                  All checks passed
 uv run python -m ci.invariants       I11 ✅ / 나머지 10종 미구현 표시
 uv run python tools/measure_state.py C=4 3,016B · C=6 3,248B · C=8 3,480B  (DDR §5.1 재현)
 ```
+
+### ✅ P0-1 완료 — `tests/schemas/test_frozen_contract.py` (70건)
+
+```
+거부 43  카드 번호 1~38 + 6c + 15의 실제 5건.  🔴 (에러 타입, 메시지 조각)까지 고정
+통과 12  P1~P5 우선주 실재 코드 4건 · P8~P12 정당한 공집합
+구조 13  필드 순서 · 금지 필드 부재 · ReasonCode 27 · SourceTrace 7 · 모델 30개
+기타  2  건수 산술 고정 · v2.2 델타 11건(28~38) 전원 존재 확인
+```
+
+**`frozen.py` 무변경.** `git diff` 클린.
+
+검증 2단계를 더 거쳤다:
+
+1. **거부 사유 전수 확인** — 43건이 전부 *의도한 검증자*에서 막힌다.
+   (#27만 `missing`인데 그게 카드의 "params 누락" 의도)
+2. **돌연변이 검사** — S-1·S-2·S-3·S-6·S-9 검증자를 제거한 `frozen.py` 사본에서
+   해당 케이스 5건이 전부 **거부에 실패**했다 → 테스트가 그 검증자를 실제로 겨냥한다.
+   (`CLAUDE.md`: "테스트는 수정 전 코드에서 반드시 실패해야 유효하다")
 
 배치된 것:
 
@@ -30,10 +49,10 @@ uv run python tools/measure_state.py C=4 3,016B · C=6 3,248B · C=8 3,480B  (DD
 
 ## 2. 🔴 아직 안 한 것 — 다음 세션이 할 일
 
-**P0-1 ~ P0-7 (팀원3 Phase 0)이 전부 미착수다.** `docs/TASK_CARDS_v2_2.md` 의 카드를 그대로 쓴다.
+**P0-2 ~ P0-7 (팀원3 Phase 0)이 미착수다.** `docs/TASK_CARDS_v2_2.md` 의 카드를 그대로 쓴다.
 
 ```
-P0-1  tests/schemas/test_frozen_contract.py   거부38 · 통과12 · 구조13   sonnet-5
+P0-1  ✅ 완료
 P0-2  app/orchestration/state.py + 리듀서5    🔴 순서 독립성(I2)         opus-5
 P0-3  contexts/{views,budget}.py + protocols  🔴 View 금지필드           opus-5
 P0-4  adapters/{base,mock}.py + assemble      참조 구현                  sonnet-5
