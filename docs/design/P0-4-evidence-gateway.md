@@ -1,6 +1,6 @@
 # P0-4 · Evidence Gateway 기반
 
-> **상태: G2 완료 / G3 사용자 승인 완료 / G4 구현 완료.**
+> **상태: G2 완료 / G3 사용자 승인 완료 / G4 구현 및 STRICT CLOSE-OUT 완료.**
 > 권위: DDR v2.2 → `app/schemas/frozen.py` → 승인된 P0-3 설계 → 다이어그램·생명주기·카드.
 > G4는 승인된 Approach B로 구현·검증되었다.
 
@@ -415,3 +415,5 @@ G4에서 CODEOWNERS의 기존 예외 설명을 “세 파일”로 갱신하고 
 - `FREEZE_CORRECTION_CANDIDATE: HASH_SERIALIZATION_AMBIGUITY`는 유지한다.
 - T2-D FOLLOW-UP: ReplayCache hit의 원 `fetched_at` provenance 복원 계약.
 - P0-7 FOLLOW-UP: I3/I4 thin CI wrapper.
+- Mutation close-out: MockAdapter 4/4, MemoryEvidenceStore 4/4,
+  MemoryReviewStore 2/2, assembler 8/8을 각각 단일 mutation으로 RED 확인하고 원복했다.

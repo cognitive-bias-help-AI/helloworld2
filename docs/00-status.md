@@ -72,7 +72,7 @@ frozen.py        무변경
 FOLLOW-UP: P0-4에서 EvidenceStore explicit DI와 MemoryEvidenceStore를 확정하고,
 P0-7에서 I3/I4 thin CI wrapper를 구현한다.
 
-### ✅ P0-4 완료 — Evidence Gateway + Memory Store
+### ✅ P0-4 STRICT CLOSED — Evidence Gateway + Memory Store
 
 ```text
 MockAdapter          provider 3종 · Protocol 5메서드 · deterministic Draft-only
@@ -80,6 +80,7 @@ MemoryEvidenceStore  run-scoped hash dedup · ordering · link set semantics
 MemoryReviewStore    Protocol 12메서드 · run isolation · ClaimEvaluation current upsert
 assemble_evidence    explicit Store DI · fetched_at 주입 · batch/store dedup · canonical link
 검증                 전체 188 passed · Ruff 통과 · frozen.py 무변경
+mutation             Mock 4/4 · EvidenceStore 4/4 · ReviewStore 2/2 · Assembler 8/8
 ```
 
 FOLLOW-UP: T2-D ReplayCache fetched_at provenance, hash delimiter serialization ambiguity,
