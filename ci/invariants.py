@@ -91,9 +91,10 @@ def _pytest_result(node_id: str, success: CheckStatus, message: str) -> CheckRes
 
 
 def check_i1() -> CheckResult:
-    return CheckResult(
-        CheckStatus.PENDING,
-        "runtime checkpointer/Saver artifact not implemented; activation scheduled for S0",
+    return _pytest_result(
+        "tests/s0/test_runtime_context.py::test_runtime_context_n0_ownership과_checkpoint_leakage",
+        CheckStatus.PASS,
+        "actual LangGraph saver serialization stays within 5120 bytes",
     )
 
 
@@ -107,9 +108,9 @@ def check_i2() -> CheckResult:
 
 def check_i3() -> CheckResult:
     return _pytest_result(
-        "tests/contexts/test_budget.py",
-        CheckStatus.PARTIAL,
-        "static budget contract passes; runtime node enforcement pending S0",
+        "tests/s0/test_runtime_invariants.py::test_I3_8개_runtime_model_call이_existing_budget를_준수한다",
+        CheckStatus.PASS,
+        "all eight runtime LLM vertices observed under existing NODE_BUDGETS",
     )
 
 
@@ -130,16 +131,18 @@ def check_i5() -> CheckResult:
 
 
 def check_i6() -> CheckResult:
-    return CheckResult(
-        CheckStatus.PENDING,
-        "LangGraph loop/router runtime not implemented; activation scheduled for S0",
+    return _pytest_result(
+        "tests/s0/test_runtime_invariants.py",
+        CheckStatus.PASS,
+        "six termination and call ceilings are backed by runtime tests",
     )
 
 
 def check_i7() -> CheckResult:
-    return CheckResult(
-        CheckStatus.CONTRACT_GAP,
-        "no application enforcement owner for CitationRef.span containment; required in S0",
+    return _pytest_result(
+        "tests/s0/test_runtime_invariants.py::test_I7_unknown과_span_mismatch는_report_publish전에_거부된다",
+        CheckStatus.PASS,
+        "citation identity and exact-span containment run before report persistence",
     )
 
 
@@ -157,7 +160,9 @@ def scan_i8_roots(roots: Sequence[Path]) -> CheckResult:
     sources = sorted(path for root in roots if root.is_dir() for path in root.rglob("*.py"))
     sources = [path for path in sources if path.name != "__init__.py" or path.stat().st_size]
     if not sources:
-        return CheckResult(CheckStatus.PENDING, "required prompts/nodes Python artifacts are absent")
+        return CheckResult(
+            CheckStatus.PENDING, "required prompts/nodes Python artifacts are absent"
+        )
 
     violations: list[str] = []
     for path in sources:
@@ -263,7 +268,9 @@ def evaluate(specs: Sequence[InvariantSpec], *, phase: str | None, strict: bool)
             try:
                 checked = item.check()
             except Exception as exc:  # runner boundary must convert exceptions into RED
-                checked = CheckResult(CheckStatus.FAIL, f"checker raised {type(exc).__name__}: {exc}")
+                checked = CheckResult(
+                    CheckStatus.FAIL, f"checker raised {type(exc).__name__}: {exc}"
+                )
         print(f"[{_display_status(checked.status):<7}] {item.invariant_id:<4} {item.label}")
         print(f"          {checked.message}")
         if checked.status is CheckStatus.FAIL or (
@@ -299,7 +306,9 @@ def main(argv: list[str] | None = None) -> int:
 
     selected = list(SPECS)
     if args.only:
-        requested = list(dict.fromkeys(part.strip().upper() for part in args.only.split(",") if part.strip()))
+        requested = list(
+            dict.fromkeys(part.strip().upper() for part in args.only.split(",") if part.strip())
+        )
         known = {item.invariant_id for item in SPECS}
         unknown = [name for name in requested if name not in known]
         if not requested or unknown:
