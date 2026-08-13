@@ -525,13 +525,27 @@ ci/invariants.py 를 작성한다. python -m ci.invariants 로 실행된다.
        C=4/6/8 대표 State 를 직렬화해 5,120B 이하인지 확인한다
        채널을 늘릴 때마다 여기서 걸린다. 값은 문서가 아니라 코드가 진실이다
 
-■ 제약
-  1. --only I1,I2 처럼 부분 실행이 가능해야 한다.
-  2. 실패 시 exit code 1 과 함께 어느 불변식이 왜 깨졌는지 한 줄로 출력한다.
-  3. I8 은 런타임이 아니라 AST 정적 검사다. 프롬프트를 안 돌리고 잡아야 한다.
+■ P0-7 G4 구현 결과 — phase-aware runner
+  P0 REQUIRED = I2, I4, I9, I10, I11. 다섯 종 모두 PASS여야 한다.
+  I3 static budget와 I5 Memory uniqueness는 기존 test를 실행해 PARTIAL defense를 보호한다.
+  I1/I6/I8은 artifact 부재 PENDING, I7은 runtime owner 부재 CONTRACT_GAP이다.
+  activation은 S0={I1,I3,I6,I7,I8}, T2={I5 physical PostgreSQL UNIQUE}다.
 
-■ 완료 판정
-  python -m ci.invariants          # 전부 통과
+■ CLI 계약
+  python -m ci.invariants              # --phase p0와 동일
+  python -m ci.invariants --phase p0   # P0 REQUIRED 5/5면 exit 0
+  python -m ci.invariants --strict     # I1~I11 모두 실제 PASS일 때만 exit 0
+  python -m ci.invariants --only I2,I4 # diagnostic scoped run, full phase 인증 아님
+  FAIL은 activation 전 invariant라도 항상 exit 1이다.
+
+■ 구현 경계
+  I2/I3/I4/I5/I9는 기존 pytest 계약을 subprocess thin wrapper로 재사용한다.
+  I8은 alias-aware AST 검사이며 production Python source 부재를 PASS로 위장하지 않는다.
+  I10은 State 참조 채널 6개와 Store read method의 native static mapping만 검사한다.
+
+■ P0 완료 판정
+  P0-7 G4 CLOSED · P0 phase required invariants 5/5 GREEN.
+  All I1~I11 strict status is NOT YET GREEN.
 ```
 
 ---

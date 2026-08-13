@@ -4,13 +4,14 @@
 
 ## 1. 완료한 것
 
-**저장소 골격 + 제어면 + 모델 슬롯 정본 + P0-1 + P0-2 + P0-3 + P0-4 + P0-5 + P0-6.**
+**저장소 골격 + 제어면 + 모델 슬롯 정본 + P0-1~P0-7.**
 
 ```
 uv sync                              pydantic 2.13.3 핀 설치 완료
-uv run pytest -q                     267 passed (2026-08-13 fresh 검증)
+uv run pytest -q                     295 passed (2026-08-13 fresh 검증)
 uv run ruff check .                  All checks passed
-uv run python -m ci.invariants       I11 ✅ / 나머지 10종 미구현 표시
+uv run python -m ci.invariants       P0 REQUIRED 5/5 PASS (exit 0)
+uv run python -m ci.invariants --strict  NOT GREEN (future 6종, expected exit 1)
 uv run python tools/measure_state.py C=4 3,016B · C=6 3,248B · C=8 3,480B  (DDR §5.1 재현)
 ```
 
@@ -113,9 +114,33 @@ mutation          16/16 independently detected
 
 FOLLOW-UP: TIMEOUT_NORMALIZATION_BOUNDARY, registry/fixture ownership, P0-7 I9 thin wrapper.
 
+### ✅ P0-7 G4 CLOSED — Phase-Aware CI Invariants
+
+```text
+P0 REQUIRED      I2 · I4 · I9 · I10 · I11 = 5/5 PASS
+PARTIAL          I3 static budget · I5 Memory reference uniqueness
+PENDING          I1 runtime checkpoint · I6 graph loop · I8 production AST scope
+CONTRACT_GAP     I7 citation span application enforcement
+CLI              default=p0 · --phase p0 exit 0 · --strict expected exit 1 · --only scoped
+검증             CI 28 passed · 전체 295 passed · Ruff PASS · mutation 11/11
+보호             frozen.py/DDR 무변경
+```
+
+Activation backlog:
+
+```text
+S0 → I1 runtime checkpoint · I3 runtime View budget · I6 loop termination
+     I7 citation containment enforcement · I8 production nodes/prompts AST
+T2 → I5 PostgreSQL physical UNIQUE(run_id, content_sha256)
+```
+
+기존 FOLLOW-UP 유지: TIMEOUT_NORMALIZATION_BOUNDARY, OWNERSHIP_FOLLOW_UP,
+NODE_ORCHESTRATION_FOLLOW_UP, VERDICT_CITATION_BINDING, VERDICT_NUMERIC_RECONCILIATION,
+T2-D fetched_at provenance, HASH_SERIALIZATION_AMBIGUITY.
+
 ## 2. 🔴 아직 안 한 것 — 다음 세션이 할 일
 
-**P0-7 (팀원3 Phase 0)이 미착수다.** `docs/TASK_CARDS_v2_2.md` 의 카드를 쓴다.
+**P0-7까지 Phase 0 foundation gate가 닫혔다. 다음 단계는 S0 Mock Vertical Slice다.**
 
 ```
 P0-1  ✅ 완료
@@ -124,7 +149,7 @@ P0-3  ✅ 완료 — Context/View/Budget + Protocol 5종 + 계약 테스트 28�
 P0-4  ✅ Evidence Gateway + Memory Store      참조 구현 완료
 P0-5  Draft schema + MockModelGateway + 조립기3종 ✅ STRICT CLOSED       opus-5
 P0-6  tests/adapters/test_contract.py         13개 계약 ✅ STRICT CLOSED sonnet-5
-P0-7  ci/invariants.py 10종 채우기            I8 만 opus-5               sonnet-5
+P0-7  phase-aware CI · P0 REQUIRED 5/5         ✅ G4 CLOSED               sonnet-5
 ```
 
 **게이트: D+2 S0 예광탄.** Mock 어댑터·Mock LLM·in-memory ReviewStore 로 `curl` 한 번에
