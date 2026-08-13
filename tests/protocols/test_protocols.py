@@ -44,7 +44,7 @@ def test_EvidenceStore는_DDR의_8개_async_메서드와_domain_type을_고정�
     expected_parameters = {
         "put_queries": ["self", "run_id", "queries"],
         "get_queries": ["self", "query_ids"],
-        "put_many": ["self", "evs"],
+        "put_many": ["self", "run_id", "evs"],
         "get_many": ["self", "ids"],
         "find_by_sha256": ["self", "run_id", "hashes"],
         "link": ["self", "pairs"],
@@ -65,7 +65,11 @@ def test_EvidenceStore는_DDR의_8개_async_메서드와_domain_type을_고정�
         "return": list[str],
     }
     assert get_type_hints(EvidenceStore.get_queries)["return"] == list[Query]
-    assert get_type_hints(EvidenceStore.put_many)["evs"] == list[Evidence]
+    assert get_type_hints(EvidenceStore.put_many) == {
+        "run_id": str,
+        "evs": list[Evidence],
+        "return": list[str],
+    }
     assert get_type_hints(EvidenceStore.get_many)["return"] == list[Evidence]
     assert get_type_hints(EvidenceStore.find_by_sha256)["return"] == dict[str, str]
     assert get_type_hints(EvidenceStore.link)["pairs"] == list[EvidenceQueryLink]
