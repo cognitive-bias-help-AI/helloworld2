@@ -193,13 +193,27 @@ tests/orchestration/test_state.py
 두 번째로 확신이 없는 것은 §4.1 의 해석 A/B 다. 다만 실질 차이가 거의 없다
 (ULID 가 시간 순이라 정렬해도 도착 순서와 거의 같다) — A 로 가도 위험이 낮다.
 
-## 8. 승인이 필요한 것 — 2건
+## 8. ✅ 승인 결과 (2026-08-13)
 
 ```
-Q1  §4.3  merge_dict:  M1(현행 유지 + n6 카드에 계약 명시)  ← 권장
-                       M2(합산 병합)  ·  M3(보류)
-Q2  §4.1  add_unique:  해석 A(집합 동등, 문서 코드 그대로)   ← 권장
-                       해석 B(정렬해서 리스트까지 동일)
+Q1  merge_dict  →  M1 채택.  {**left, **right} 현행 유지.
+                   🔴 provider 단위 합산은 n6 게이트웨이 책임이다.
+                      TASK_CARDS 의 n6 관련 카드에 이 계약을 글로 박는다 —
+                      안 박으면 나중에 팬아웃으로 바꾸는 사람이 배너를 조용히 깨뜨린다.
+Q2  add_unique  →  해석 A 채택.  도착 순서 보존, I2 는 집합으로 비교.
+                   순서가 결과에 영향을 주는 곳(store 조회·truncate)에서 정렬한다.
 ```
 
-승인되면 §6 검증 계획대로 **테스트를 먼저 쓰고**(구현 전 실패 확인) 구현한다.
+## 9. G4 수직 슬라이스 — 승인 후 코딩
+
+```
+1. tests/orchestration/test_state.py 를 먼저 쓴다   → verify: 구현 전 실패 확인
+2. 리듀서 5종 구현 (본문)                            → verify: 1번이 초록
+3. ReviewState TypedDict 채널 19개                   → verify: 개수·금지채널 테스트
+4. None 을 항등원으로 수용 (§5-3)                     → verify: f(None, x) == x
+5. 돌연변이 검사                                      → verify: add_unique→operator.add
+                                                              로 바꾸면 중복 테스트 실패
+6. n6 합산 계약을 TASK_CARDS 에 1줄 추가 (M1 조건)    → verify: 문서 diff
+7. ci.invariants --only I1,I2                        → verify: exit 0
+8. 전체 회귀                                          → verify: pytest -q · ruff
+```
