@@ -104,6 +104,18 @@ def test_ctx_items는_노드별_반복_단위만_세고_Claim은_제외한다():
     assert ctx_items(RenderView(slots=[], banners=[], theory_notes=[], citations=[])) == 0
 
 
+def test_RenderView_guard_feedback은_n11_예산_안에_포함된다():
+    from app.schemas.frozen import Violation
+
+    feedback = [
+        Violation(slot_no=index, rule_id=f"R{index}", kind="pattern", matched="금지 표현", span_offset=(0, 5))
+        for index in range(1, 9)
+    ]
+    view = RenderView(slots=[], banners=[], theory_notes=[], citations=[], guard_feedback=feedback)
+
+    assert ctx_chars(view) <= NODE_BUDGETS["n11"].chars
+
+
 @pytest.mark.parametrize("claim_count,stock_count", [(9, 3), (0, 0)])
 def test_Evidence_9_plus_3_상한은_허용한다(claim_count, stock_count):
     validate_evidence_counts(claim_count=claim_count, stock_count=stock_count)

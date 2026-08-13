@@ -114,7 +114,7 @@ def test_8개_semantic_View의_허용_필드가_고정된다():
         VerifyPacket: {"claim", "evidence", "numeric_checks"},
         IntegrationView: {"evaluations", "oppose", "missing_slots"},
         GuardInput: {"slot_no", "text", "quoted", "citations"},
-        RenderView: {"slots", "banners", "theory_notes", "citations"},
+        RenderView: {"slots", "banners", "theory_notes", "citations", "guard_feedback"},
     }
 
     assert {model: set(model.model_fields) for model in expected} == expected

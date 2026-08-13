@@ -17,6 +17,7 @@ from app.schemas.frozen import (
     OpposeBlock,
     SlotId,
     TheoryNote,
+    Violation,
 )
 
 
@@ -113,3 +114,4 @@ class RenderView(_ViewModel):
     banners: list[NonBlankStr]
     theory_notes: list[TheoryNote]
     citations: list[RenderCitationView]
+    guard_feedback: list[Violation] = Field(default_factory=list)
