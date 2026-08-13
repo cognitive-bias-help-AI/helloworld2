@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import operator
+import random
 from typing import get_args, get_origin, get_type_hints
 
 import pytest
@@ -42,16 +43,16 @@ def test_add_unique는_입력을_변경하지_않는다():
 
 def test_add_unique의_I2는_집합_의미로_순서에_독립적이다():
     chunks = [["A", "B"], ["B", "C"], ["D", "A"]]
-    orders = [chunks, list(reversed(chunks)), [chunks[1], chunks[2], chunks[0]]]
-
-    results = []
-    for order in orders:
+    randomizer = random.Random(20260813)
+    results = set()
+    for _ in range(5):
+        order = randomizer.sample(chunks, k=len(chunks))
         value = None
         for chunk in order:
             value = add_unique(value, chunk)
-        results.append(set(value or []))
+        results.add(frozenset(value or []))
 
-    assert results == [{"A", "B", "C", "D"}] * 3
+    assert results == {frozenset({"A", "B", "C", "D"})}
 
 
 def test_add_unique_by_id는_같은_ID의_나중_레코드로_교체한다():
