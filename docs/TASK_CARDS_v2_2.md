@@ -137,6 +137,9 @@ app/orchestration/state.py 파일 하나만 작성한다.
   class ReviewState(TypedDict): ...        # 아래 채널 정의 그대로
   리듀서 5종: add_unique · add_unique_by_id · merge_by_slot_id · merge_dict · sum_counters
 
+■ 구현 순서
+  tests/orchestration/test_state.py 선작성 → state.py 부재 RED 확인 → 최소 구현 → GREEN
+
 ■ 채널 정의 — 19개 (이 목록에서 하나도 빼거나 더하지 않는다)
   run_id: str
   thread_id: str
@@ -179,10 +182,13 @@ app/orchestration/state.py 파일 하나만 작성한다.
 
 ■ 제약
   1. 리듀서는 순수 함수. 입력 리스트를 in-place 로 바꾸지 않는다.
-  2. 🔴 리듀서는 순서 독립이어야 한다. reduce(a,b) 를 셔플해도 결과가 1종이어야 한다.
-     불변식 I2 가 셔플 5회로 검사한다.
-  3. add_unique 는 순서를 보존한다 (먼저 들어온 것이 앞).
-  4. sum_counters 는 없는 키를 0 으로 취급한다.
+  2. add_unique 는 최초 도착 순서를 보존한다. I2 는 list equality 가 아니라
+     set semantics 로 값 집합의 동일성을 검사한다.
+  3. add_unique_by_id · merge_by_slot_id 는 동일 ID 에서 right wins 다.
+  4. merge_dict 는 {**left, **right} right overwrite 다.
+     동일 provider 복수 Query 결과는 n6 Gateway 내부에서 집계한 뒤
+     provider 별 CollectionResult 하나로 State delta 를 반환한다.
+  5. sum_counters 만 카운터 합산 책임을 가지며, 없는 키를 0 으로 취급한다.
 
 ■ 완료 판정
   pytest tests/orchestration/test_state.py -q

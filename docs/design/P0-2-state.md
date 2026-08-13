@@ -1,6 +1,6 @@
-# P0-2 · G3 설계 — `app/orchestration/state.py`
+# P0-2 · G3 설계·승인 / G4 구현 완료 — `app/orchestration/state.py`
 
-> **상태: 승인 대기.** 본문(구현)은 한 줄도 쓰지 않았다.
+> **상태: G3 설계·승인 완료 / G4 구현 완료 (2026-08-13).**
 > 근거 문서: DDR §5 · `STATE_LIFECYCLE_v2_2.md` §2·§4 · `TASK_CARDS_v2_2.md` P0-2
 
 ---
@@ -165,7 +165,8 @@ tests/orchestration/test_state.py
 3. 결합법칙                      → verify: f(f(a,b),c) == f(a,f(b,c))
 4. in-place 변경 없음             → verify: 입력 리스트가 호출 전후 동일
 5. add_unique 중복 제거          → verify: 같은 ID 2회 append 시 1건
-6. merge_dict 합산 (M1 채택 시)   → verify: dart 2브랜치 → items_fetched 합
+6. merge_dict M1 right overwrite   → verify: 같은 provider 는 right 가 이김
+                                      (복수 Query 집계는 n6 Gateway 내부 책임)
 7. 채널 19개 정확히               → verify: ReviewState.__annotations__ 개수
 8. 금지 채널 부재                 → verify: evidence_ids · claim_evidence_keys 없음
 
@@ -204,7 +205,7 @@ Q2  add_unique  →  해석 A 채택.  도착 순서 보존, I2 는 집합으로
                    순서가 결과에 영향을 주는 곳(store 조회·truncate)에서 정렬한다.
 ```
 
-## 9. G4 수직 슬라이스 — 승인 후 코딩
+## 9. ✅ G4 수직 슬라이스 — 구현 완료
 
 ```
 1. tests/orchestration/test_state.py 를 먼저 쓴다   → verify: 구현 전 실패 확인
@@ -217,3 +218,6 @@ Q2  add_unique  →  해석 A 채택.  도착 순서 보존, I2 는 집합으로
 7. ci.invariants --only I1,I2                        → verify: exit 0
 8. 전체 회귀                                          → verify: pytest -q · ruff
 ```
+
+Fresh close-out 검증(2026-08-13): P0-2 단위 25 passed · 전체 135 passed ·
+Ruff 통과 · 체크포인트 C=4/6/8 각각 3,016B/3,248B/3,480B · `frozen.py` 무변경.

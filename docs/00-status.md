@@ -4,11 +4,11 @@
 
 ## 1. 완료한 것
 
-**저장소 골격 + 제어면 + 모델 슬롯 정본 + P0-1.**
+**저장소 골격 + 제어면 + 모델 슬롯 정본 + P0-1 + P0-2.**
 
 ```
 uv sync                              pydantic 2.13.3 핀 설치 완료
-uv run pytest -q                     91 passed  (계약 70 + 레지스트리 21)
+uv run pytest -q                     135 passed (2026-08-13 fresh 검증)
 uv run ruff check .                  All checks passed
 uv run python -m ci.invariants       I11 ✅ / 나머지 10종 미구현 표시
 uv run python tools/measure_state.py C=4 3,016B · C=6 3,248B · C=8 3,480B  (DDR §5.1 재현)
@@ -47,13 +47,24 @@ uv run python tools/measure_state.py C=4 3,016B · C=6 3,248B · C=8 3,480B  (DD
 | `CODEOWNERS` | §9.2 소유권 |
 | `docs/` | DDR · TASK_CARDS · T3 · DIAGRAMS · STATE_LIFECYCLE · model_cost(v1·v2) |
 
+### ✅ P0-2 완료 — `app/orchestration/state.py` + 계약 테스트 25건
+
+```
+리듀서 5종     add_unique · add_unique_by_id · merge_by_slot_id · merge_dict · sum_counters
+ReviewState    승인된 19채널만 유지 · evidence_ids/claim_evidence_keys 없음
+merge_dict     M1 right overwrite · 동일 provider 복수 Query 집계는 n6 Gateway 내부 책임
+add_unique     최초 도착 순서 보존 · I2 비교는 set semantics
+검증           단위 25 passed · 전체 135 passed · Ruff 통과
+예산           C=4 3,016B · C=6 3,248B · C=8 3,480B (상한 5,120B)
+```
+
 ## 2. 🔴 아직 안 한 것 — 다음 세션이 할 일
 
-**P0-2 ~ P0-7 (팀원3 Phase 0)이 미착수다.** `docs/TASK_CARDS_v2_2.md` 의 카드를 그대로 쓴다.
+**P0-3 ~ P0-7 (팀원3 Phase 0)이 미착수다.** `docs/TASK_CARDS_v2_2.md` 의 카드를 쓴다.
 
 ```
 P0-1  ✅ 완료
-P0-2  app/orchestration/state.py + 리듀서5    🔴 순서 독립성(I2)         opus-5
+P0-2  ✅ 완료 — state.py + 리듀서5 + 계약 테스트 25건
 P0-3  contexts/{views,budget}.py + protocols  🔴 View 금지필드           opus-5
 P0-4  adapters/{base,mock}.py + assemble      참조 구현                  sonnet-5
 P0-5  models/gateway.py + 조립기3종           🔴 union 검사              opus-5
