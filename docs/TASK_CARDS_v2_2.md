@@ -432,6 +432,9 @@ app/models/gateway.py 와 app/orchestration/assemble.py 를 작성한다.
 
 ## P0-6 · 어댑터 계약 테스트 `tests/adapters/test_contract.py`
 
+> **완료: 2026-08-13 · G4 STRICT CLOSED · 13 contract methods · mutation 16/16**
+> Phase 0은 MockAdapter 3 provider mode이며 실제 Adapter는 이후 같은 registry에 추가한다.
+
 ```text
 [Codex 프롬프트]
 
@@ -466,11 +469,12 @@ class TestProviderContract:
         """🆕 source_url 은 https?:// 로 시작하거나 None."""
 
     def test_raw_span_budget(self, adapter, fixture):
-        """p95 길이 ≤ 예산.  news 250 / dart 150 / quote 100  [추정]
-        넘으면 §6 계약표의 packet 상한이 그대로 깨진다."""
+        """500자는 hard bound. p95 news 250/dart 150/quote 100은 provisional metric이며
+        20 samples부터 review eligibility만 표시하고 자동 hardening하지 않는다."""
 
     def test_normalized_value_coverage(self, adapter, fixture):
-        """dart·quote 는 채움률 ≥ 90%.
+        """dart·quote eligible Draft는 표본 수와 무관하게 채움률 ≥ 90%.
+        eligible=0은 vacuous pass가 아니라 contract error다.
         비면 n8 이 규칙 검산을 못 하고 수치 판단이 LLM 으로 넘어간다."""
 
     def test_span_scope_declared(self, adapter, fixture):

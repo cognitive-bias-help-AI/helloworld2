@@ -147,7 +147,7 @@ export ANTHROPIC_MODEL="claude-sonnet-5"   # 기본값 고정
 | **P0-3** `views.py` `budget.py` `protocols.py` | 🔴 `opus-5` | D-28 계약 그 자체. 금지 필드 하나 빠뜨리면 I4가 못 잡고 그대로 프로덕션까지 갑니다 |
 | **P0-4** `mock.py` + `assemble_evidence` | `sonnet-5` | 명세가 카드에 다 있음. 참조 구현이라 정확하되 어렵지 않음 |
 | **P0-5** `MockModelGateway` + 조립기 3종 | 🔴 `opus-5` | **union 검사가 제품 정직성의 마지막 방어선**입니다. 여기가 느슨하면 스키마가 다 통과시킵니다 |
-| **P0-6** 계약 테스트 | `sonnet-5` | 12개 테스트 함수. 명세대로 |
+| **P0-6** 계약 테스트 | `sonnet-5` | 13개 테스트 함수. 명세대로 |
 | **P0-7** CI 불변식 11종 | `sonnet-5` → I8만 `opus-5` | I8은 AST 정적 검사라 설계가 필요합니다. 나머지는 기계적 |
 | **S0** `graph.py` `routing.py` 엣지 12건 | 🔴 `opus-5` | 사이클 2개(n9→n5, n10⟲)가 있고 정지성이 카운터에 걸려 있습니다 |
 | **S0** n0·n2·n11 템플릿·n12 | `sonnet-5` | 규칙 노드. 로직이 단순 |
@@ -564,10 +564,10 @@ tests/adapters/test_contract.py 를 작성한다.
    완료 판정이 사람 리뷰가 아니라 pytest 한 줄이 되게 하는 것이 목적이다.
    그러니 테스트가 애매하면 안 된다. 각 테스트가 무엇을 보는지 docstring 1줄.
 
-12개 테스트를 카드대로 만든다. content_sha256 안정성은 여기 넣지 마라
+13개 테스트를 카드대로 만든다. content_sha256 안정성은 여기 넣지 마라
 (게이트웨이로 이동했다). tests/gateway/test_assemble.py 에 있다.
 
-MockAdapter 로 12개가 전부 통과하는 것까지 확인해라.
+MockAdapter 3 provider mode로 13개가 전부 통과하는 것까지 확인해라.
 완료: pytest tests/adapters/ -q
 ```
 
