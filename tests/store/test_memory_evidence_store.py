@@ -85,6 +85,7 @@ def test_hash는_run별이고_link는_멱등이며_관계조회는_sort한다():
         EvidenceQueryLink(evidence_id=es[1].evidence_id, query_id=qs[1].query_id),
     ]
     run(store.link(pairs + pairs))
+    assert len(store._links) == 2
     expected = sorted(e.evidence_id for e in es)
     assert run(store.evidence_ids_for_claim(claim)) == expected
     assert run(store.evidence_ids_for_queries([qs[1].query_id, qs[0].query_id])) == expected

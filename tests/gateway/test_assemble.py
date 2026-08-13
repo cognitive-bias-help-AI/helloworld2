@@ -111,6 +111,7 @@ def test_same_run_repeat와_query_link는_멱등이다():
     first = run(assemble_evidence([draft()], q, c, NOW, "r", FETCHED, store))
     second = run(assemble_evidence([draft()], q, c, NOW, "r", FETCHED, store))
     assert len(first[0]) == 1 and first[1] == 0 and second == ([], 1)
+    assert len(store._links) == 1
     assert run(store.evidence_ids_for_queries([q.query_id])) == [first[0][0].evidence_id]
 
 
