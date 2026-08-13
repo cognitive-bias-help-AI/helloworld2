@@ -363,6 +363,8 @@ app/store/memory_evidence_store.py, app/store/memory_review_store.py 를 작성�
 
 ## P0-5 · `models/gateway.py` (MockModelGateway) + 조립기 3종
 
+> **완료: 2026-08-13 · G4 STRICT CLOSED · 전체 216 passed · mutation 24/24**
+
 ```text
 [Codex 프롬프트]
 
