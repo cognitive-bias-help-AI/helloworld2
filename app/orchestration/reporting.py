@@ -41,10 +41,28 @@ class RenderCandidateStore:
         self._items: dict[str, RenderCandidate] = {}
 
     def put(self, run_id: str, candidate: RenderDraft) -> None:
-        self._items[run_id] = RenderCandidate(candidate=candidate)
+        previous = self._items.get(run_id)
+        self._items[run_id] = RenderCandidate(
+            candidate=candidate,
+            guard_feedback=() if previous is None else previous.guard_feedback,
+            rewrite_count=0 if previous is None else previous.rewrite_count,
+        )
 
     def get(self, run_id: str) -> RenderCandidate:
         return self._items[run_id]
+
+    def contains(self, run_id: str) -> bool:
+        return run_id in self._items
+
+    def review(self, run_id: str, violations: list[Violation]) -> None:
+        current = self.get(run_id)
+        self._items[run_id] = current.model_copy(
+            update={
+                "guard_feedback": tuple(violations),
+                "rewrite_count": current.rewrite_count + bool(violations),
+                "approved": not violations,
+            }
+        )
 
 
 def build_report_artifact(
