@@ -18,9 +18,10 @@
 /app/domain/theory_table.py       @팀원2
 /tests/fixtures/dart/             @팀원2
 
-# 🔴 예외 — store/ 는 팀원2 소유지만 이 두 파일은 팀원3 이 쓴다.
-#    protocols.py 는 계약(팀원2가 구현할 Protocol), memory_review_store.py 는 S0 예광탄용 참조 구현.
+# 🔴 예외 — store/ 는 팀원2 소유지만 이 세 파일은 팀원3 이 쓴다.
+#    protocols.py 는 계약, memory_*_store.py 는 S0 예광탄용 참조 구현.
 /app/store/protocols.py           @팀원3
+/app/store/memory_evidence_store.py @팀원3
 /app/store/memory_review_store.py @팀원3
 
 # ── 팀원 3 · 그래프·컨텍스트·판단 라인 ────────────────────
