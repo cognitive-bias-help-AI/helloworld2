@@ -259,7 +259,7 @@ app/gateway/protocols.py, app/models/protocols.py 를 작성한다.
   class EvidenceStore(Protocol):
       async def put_queries(self, run_id: str, queries: list[Query]) -> list[str]: ...
       async def get_queries(self, query_ids: list[str]) -> list[Query]: ...
-      async def put_many(self, evs: list[Evidence]) -> list[str]: ...
+      async def put_many(self, run_id: str, evs: list[Evidence]) -> list[str]: ...
       async def get_many(self, ids: list[str]) -> list[Evidence]: ...
       async def find_by_sha256(self, run_id: str, hashes: list[str]) -> dict[str, str]: ...
       async def link(self, pairs: list[EvidenceQueryLink]) -> None: ...
@@ -298,13 +298,13 @@ app/gateway/protocols.py, app/models/protocols.py 를 작성한다.
   I3/I4 thin CI wrapper 는 P0-7 에서 위 계약 테스트를 호출한다.
 ```
 
-## P0-4 · `adapters/{base,mock}.py` + `gateway/assemble.py` + `store/memory_review_store.py`
+## P0-4 · ✅ `adapters/mock.py` + `gateway/assemble.py` + Memory Store 2종
 
 ```text
 [Codex 프롬프트]
 
-app/gateway/adapters/base.py, app/gateway/adapters/mock.py,
-app/gateway/assemble.py, app/store/memory_review_store.py 를 작성한다.
+app/gateway/adapters/mock.py, app/gateway/assemble.py,
+app/store/memory_evidence_store.py, app/store/memory_review_store.py 를 작성한다.
 
 ■ 🔴 mock.py 는 단순한 스텁이 아니다
   이 파일이 팀원1(키움)과 팀원2(DART)가 보고 따라 쓰는 참조 구현이다.
@@ -324,7 +324,8 @@ app/gateway/assemble.py, app/store/memory_review_store.py 를 작성한다.
 ■ assemble.py — 게이트웨이 조립기
   async def assemble_evidence(
       drafts: list[EvidenceDraft], q: Query, call: ProviderCall,
-      as_of: datetime, run_id: str,
+      as_of: datetime, run_id: str, fetched_at: datetime,
+      store: EvidenceStore,
   ) -> tuple[list[Evidence], int]:
 
   0. assert call.run_id == run_id
@@ -337,7 +338,7 @@ app/gateway/assemble.py, app/store/memory_review_store.py 를 작성한다.
         어댑터가 각자 계산하면 provider 마다 다른 해시 규칙이 생기고
         그러면 F4 중복 제거가 통째로 무효가 된다.
   2. find_by_sha256(run_id, hashes) 로 기존 행 조회 → 있으면 링크만 추가
-  3. 신규만 evidence_id(ULID) 부여, fetched_at = call 응답 시각,
+  3. 신규만 evidence_id(ULID) 부여, fetched_at = caller 주입 aware 시각,
      as_of / provider_request_id 주입
   4. EvidenceQueryLink(evidence_id, q.query_id) 생성
   5. (신규, 중복) 건수를 돌려준다 → CollectionResult.items_deduped 로 상태화
@@ -971,7 +972,7 @@ app/store/evidence_store.py 와 app/store/migrations/ 만 작성한다.
   class PostgresEvidenceStore:
       async def put_queries(self, run_id: str, queries: list[Query]) -> list[str]
       async def get_queries(self, query_ids: list[str]) -> list[Query]
-      async def put_many(self, evs: list[Evidence]) -> list[str]
+      async def put_many(self, run_id: str, evs: list[Evidence]) -> list[str]
       async def get_many(self, ids: list[str]) -> list[Evidence]
       async def find_by_sha256(self, run_id: str, hashes: list[str]) -> dict[str, str]
       async def link(self, pairs: list[EvidenceQueryLink]) -> None
