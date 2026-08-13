@@ -1,0 +1,10 @@
+# 🔴 전 파일 LF 고정. Windows 팀원이 섞이면 core.autocrlf 가 CRLF 로 바꾼다.
+# 그러면 fixture JSON 의 바이트가 달라지고 content_sha256 이 플랫폼마다 갈린다 —
+# F4 중복 제거(UNIQUE run_id, content_sha256)와 D-15 재현성이 통째로 무효가 된다.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.zip binary
+*.docx binary
+*.xlsx binary
