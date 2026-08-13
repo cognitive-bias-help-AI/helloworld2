@@ -1,0 +1,50 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./config/secrets*)",
+      "Edit(./app/gateway/adapters/kiwoom.py)",
+      "Edit(./app/gateway/adapters/dart.py)",
+      "Edit(./app/domain/stock_master.py)",
+      "Edit(./app/domain/corp_code.py)",
+      "Edit(./app/store/evidence_store.py)",
+      "Edit(./app/store/review_store.py)",
+      "Edit(./app/gateway/replay_cache.py)",
+      "Edit(./app/domain/theory_table.py)",
+      "Edit(./app/observability/cost.py)",
+      "Edit(./app/observability/alerts.py)",
+      "Edit(./app/gateway/ratelimit.py)"
+    ],
+    "ask": [
+      "Edit(./app/schemas/frozen.py)",
+      "Edit(./app/orchestration/state.py)",
+      "Edit(./app/orchestration/graph.py)",
+      "Bash(git push:*)"
+    ],
+    "allow": [
+      "Bash(uv run pytest:*)",
+      "Bash(uv run ruff check:*)",
+      "Bash(uv sync:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "uv run python .claude/hooks/lint.py" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "uv run python .claude/hooks/verify.py" }
+        ]
+      }
+    ]
+  }
+}

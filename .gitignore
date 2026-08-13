@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+uv.lock
+
+# 🔴 인증키가 들어가는 경로. 절대 커밋하지 않는다.
+.env
+config/secrets*
+data/*.json
+!data/.gitkeep
+
+# 어댑터 fixture 는 커밋한다 (비용 0 회귀의 재료, D-21).
+# 단 API 키가 마스킹된 것만 — T2-D 의 마스킹이 그 보증이다.

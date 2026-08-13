@@ -1,0 +1,80 @@
+# 현재 상태 — 2026-08-13
+
+> 이 파일만 읽으면 새 세션이 이어갈 수 있어야 한다. 대화 요약이 아니라 상태다.
+
+## 1. 완료한 것
+
+**저장소 골격 + 제어면 + 모델 슬롯 정본.** 아래 4개가 전부 실제로 돈다.
+
+```
+uv sync                              pydantic 2.13.3 핀 설치 완료
+uv run pytest -q                     21 passed  (tests/models/test_registry.py)
+uv run ruff check .                  All checks passed
+uv run python -m ci.invariants       I11 ✅ / 나머지 10종 미구현 표시
+uv run python tools/measure_state.py C=4 3,016B · C=6 3,248B · C=8 3,480B  (DDR §5.1 재현)
+```
+
+배치된 것:
+
+| 경로 | 내용 |
+|---|---|
+| `app/schemas/frozen.py` | v2.2 FROZEN. **한 글자도 안 고쳤다** |
+| `app/models/registry.py` | 🆕 모델 ID · 단가 · effort 정본 |
+| `config/fx.yaml` | 환율 (코드 하드코딩 금지) |
+| `tools/measure_state.py` | import 경로 수정 + `--assert-under` 추가 (I11 진입점) |
+| `ci/invariants.py` | 11종 골격. I11 만 구현 |
+| `CLAUDE.md` ×3 | 루트 · `app/schemas/` · `app/orchestration/` |
+| `.claude/` | settings.json · 훅 2 · 서브에이전트 5 · 커맨드 4 |
+| `CODEOWNERS` | §9.2 소유권 |
+| `docs/` | DDR · TASK_CARDS · T3 · DIAGRAMS · STATE_LIFECYCLE · model_cost(v1·v2) |
+
+## 2. 🔴 아직 안 한 것 — 다음 세션이 할 일
+
+**P0-1 ~ P0-7 (팀원3 Phase 0)이 전부 미착수다.** `docs/TASK_CARDS_v2_2.md` 의 카드를 그대로 쓴다.
+
+```
+P0-1  tests/schemas/test_frozen_contract.py   거부38 · 통과12 · 구조13   sonnet-5
+P0-2  app/orchestration/state.py + 리듀서5    🔴 순서 독립성(I2)         opus-5
+P0-3  contexts/{views,budget}.py + protocols  🔴 View 금지필드           opus-5
+P0-4  adapters/{base,mock}.py + assemble      참조 구현                  sonnet-5
+P0-5  models/gateway.py + 조립기3종           🔴 union 검사              opus-5
+P0-6  tests/adapters/test_contract.py         12개 테스트                sonnet-5
+P0-7  ci/invariants.py 10종 채우기            I8 만 opus-5               sonnet-5
+```
+
+**게이트: D+2 S0 예광탄.** Mock 어댑터·Mock LLM·in-memory ReviewStore 로 `curl` 한 번에
+`report_id` 가 나와야 하고, 통과한 뒤에 계약 테스트와 함께 어댑터 작업을 인계한다.
+
+## 3. 내가 내린 설계 결정과 이유
+
+| # | 결정 | 이유 |
+|---|---|---|
+| D1 | Sonnet 5 를 **정가 $3/$15** 로 등록 | 문서의 $2/$10 은 **2026-08-31 만료** 도입가. 그대로 두면 9월 1일에 예산이 1.5배 틀어짐 |
+| D2 | SMALL `reasoning_effort=None` **강제** | Haiku 4.5 는 effort 미지원 — 보내면 400. registry 가 빌드 시점에 거부 |
+| D3 | effort 를 **노드별 override** (n8=high·n9=medium·n10=low) | `ModelSpec` 은 슬롯당 1개만 담는데 LARGE 3노드 요구가 다름. `prompt_version` 접두사로 조회 → `frozen.py` 변경 0건 |
+| D4 | n8 = `high` (xhigh 아님) | packet 12건 고정 + 조립기 union 검사가 누락을 이미 잡음. 등급을 올려 얻을 것이 조립기와 겹침. **S1 골든셋에서 medium 스윕** |
+| D5 | SMALL 슬롯 캐시 계획 **폐기** | Haiku 4.5 최소 프리픽스 4,096tok. n7 예산 전체(5,800자≈3,867tok)로도 못 넘음. T3 §1.5 재배치는 n8 에만 적용 |
+| D6 | 훅을 `.sh` → `.py` | 이 머신의 `bash` 는 git-bash 가 아니라 **WSL** 로 해소됨. `.sh` 훅은 다른 파일시스템을 봄 |
+| D7 | `docs/` 를 ruff 제외 | 설계 시점 스크립트. 실행 경로 아님 |
+| D8 | `frozen.py` 에 `UP037`·`UP042` per-file-ignore | 고치려면 frozen 을 열어야 함. **승인 대상 목록**이지 면제가 아님 |
+| D9 | `test_frozen_contract_v2_2.py` → `docs/*.reference.py` | pytest 테스트가 아니라 v2.1d↔v2.2 동시 비교 하네스. `app.schemas.frozen_v2_1d` 가 이 저장소에 없어 수집 시 전원 실패시킴 |
+
+## 4. 확신이 없는 것
+
+1. **thinking 토큰량.** Opus 5·Sonnet 5 는 기본 ON 이고 출력으로 과금된다.
+   콜당 2,500토큰 가정 시 run 비용이 문서값(543원)의 **2.1배(1,155원)**.
+   `[미측정]` — S1 실호출로 노드별 실측이 필요하다. `r` 다음으로 큰 변수다.
+2. **`r`(chars_per_token)이 슬롯마다 다르다.** Opus 5 와 Haiku 4.5 는 토크나이저가 다르다.
+   `budget.py` 에 상수 1개를 두면 안 된다. T1-D 는 **슬롯당** 20건씩 재야 한다.
+3. **`max_tokens` 상한.** thinking + 응답 텍스트의 합에 걸린다. 여유 없이 잡으면
+   n8 응답이 중간에 잘린다. 아직 아무도 값을 안 정했다.
+4. **`.claude/settings.json` 훅이 이 머신에서 실제로 발화하는지** 미검증.
+   `uv run python .claude/hooks/verify.py` 를 직접 돌리면 0 을 리턴하는 것까지만 확인했다.
+
+## 5. 외부 블로커 (팀원 대기)
+
+```
+팀원1   키움 계좌 개설 + IP 등록 (리드타임 최장 — 오늘 신청) · KRX 인증키
+팀원2   OpenDART 인증키 · Postgres (docker-compose 미작성)
+팀원3   ANTHROPIC_API_KEY · 네이버 검색 API · Slack Webhook (알람)
+```
