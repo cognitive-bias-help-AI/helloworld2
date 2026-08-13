@@ -1,0 +1,6 @@
+{
+  "collected_at": "2026-08-13T00:00:00+00:00",
+  "expectations": [
+    {"source_ref": "20250814000123", "expected_span_scope": "structured_field", "expects_normalized_value": true}
+  ]
+}

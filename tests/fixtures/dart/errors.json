@@ -1,0 +1,7 @@
+[
+  {"case_id": "5xx", "raw": {"status": 500}, "reason_code": "upstream_5xx", "retryable": true},
+  {"case_id": "429", "raw": {"status": 429}, "reason_code": "rate_limit", "retryable": true, "hint_required": true},
+  {"case_id": "401", "raw": {"status": 401}, "reason_code": "auth_failed", "retryable": false},
+  {"case_id": "403", "raw": {"status": 403}, "reason_code": "auth_failed", "retryable": false},
+  {"case_id": "timeout", "raw": {"timeout": true}, "reason_code": "upstream_timeout", "retryable": true}
+]

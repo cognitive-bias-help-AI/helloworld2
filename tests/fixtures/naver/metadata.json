@@ -1,0 +1,6 @@
+{
+  "collected_at": "2026-08-13T00:00:00+00:00",
+  "expectations": [
+    {"source_ref": "news-0001", "expected_span_scope": "headline_snippet", "expects_normalized_value": false}
+  ]
+}

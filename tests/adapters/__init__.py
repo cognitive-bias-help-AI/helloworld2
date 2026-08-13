@@ -1,0 +1,1 @@
+"""Reusable ProviderAdapter contract tests."""

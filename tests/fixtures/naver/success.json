@@ -1,0 +1,5 @@
+{
+  "provider": "naver",
+  "endpoint": "/naver",
+  "params": {"code": "005930"}
+}
