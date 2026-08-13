@@ -207,8 +207,11 @@ app/gateway/protocols.py, app/models/protocols.py 를 작성한다.
   GuardScanView · SlotContext · AskBackContext · EvidencePacket
   VerifyPacket · IntegrationView · GuardInput(frozen.py 재사용) · RenderView
 
-  각 View 는 pydantic BaseModel 이고 model_config = ConfigDict(extra="forbid") 다.
-  각 View 에 def ctx_chars(self) -> int 와 def ctx_items(self) -> int 를 만든다.
+  각 신설 View 는 pydantic BaseModel 이고
+  model_config = ConfigDict(extra="forbid", frozen=True) 다.
+  ctx_chars(view) / ctx_items(view) 는 budget.py 에 두며 View 메서드로 만들지 않는다.
+  ClaimView · EvidenceExcerptView · ClassifiedEvidenceView 최소 projection을 사용한다.
+  GuardInput 여러 건의 transport는 GuardBatchEnvelope가 맡으며 semantic View에는 세지 않는다.
 
 ■ 🔴 금지 필드 (불변식 I4 가 model_fields 정적 검사로 확인한다)
   GuardScanView    slots, claims, evidence
@@ -244,6 +247,8 @@ app/gateway/protocols.py, app/models/protocols.py 를 작성한다.
       if len(items) <= limit: return items, 0
       kept = [items[0]] + items[-(limit-1):]
       return sorted(kept, key=lambda e: e.evidence_id), len(items) - limit
+
+  limit <= 0 은 ValueError, limit == 1 은 가장 오래된 1건을 반환한다.
 
   이유: "최근 몇 년 영업이익이 좋아지고 있다" 같은 추세 주장에서
        오래된 근거가 판정의 필수 입력이다. 최신순으로만 자르면
@@ -289,7 +294,8 @@ app/gateway/protocols.py, app/models/protocols.py 를 작성한다.
 
 ■ 완료 판정
   pytest tests/contexts/ -q
-  python -m ci.invariants --only I3,I4
+  pytest tests/protocols/ -q
+  I3/I4 thin CI wrapper 는 P0-7 에서 위 계약 테스트를 호출한다.
 ```
 
 ## P0-4 · `adapters/{base,mock}.py` + `gateway/assemble.py` + `store/memory_review_store.py`

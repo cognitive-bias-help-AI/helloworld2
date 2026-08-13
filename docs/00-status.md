@@ -4,11 +4,11 @@
 
 ## 1. 완료한 것
 
-**저장소 골격 + 제어면 + 모델 슬롯 정본 + P0-1 + P0-2.**
+**저장소 골격 + 제어면 + 모델 슬롯 정본 + P0-1 + P0-2 + P0-3.**
 
 ```
 uv sync                              pydantic 2.13.3 핀 설치 완료
-uv run pytest -q                     135 passed (2026-08-13 fresh 검증)
+uv run pytest -q                     163 passed (2026-08-13 fresh 검증)
 uv run ruff check .                  All checks passed
 uv run python -m ci.invariants       I11 ✅ / 나머지 10종 미구현 표시
 uv run python tools/measure_state.py C=4 3,016B · C=6 3,248B · C=8 3,480B  (DDR §5.1 재현)
@@ -58,14 +58,28 @@ add_unique     최초 도착 순서 보존 · I2 비교는 set semantics
 예산           C=4 3,016B · C=6 3,248B · C=8 3,480B (상한 5,120B)
 ```
 
+### ✅ P0-3 완료 — Context/View/Budget + Protocol 5종
+
+```text
+View             semantic 8종 + 최소 projection + GuardBatchEnvelope transport
+Budget           8개 노드 상한 · payload ctx_chars · 의미 단위 ctx_items · Evidence 9+3
+truncate         최오래 1 + 최신 limit-1 · ID 결정 정렬 · limit<=0 ValueError
+Protocol         EvidenceStore · ReviewStore · ProviderAdapter · ReplayCache · ModelGateway
+검증             contexts 22 · protocols 6 · 전체 163 passed · Ruff 통과
+frozen.py        무변경
+```
+
+FOLLOW-UP: P0-4에서 EvidenceStore explicit DI와 MemoryEvidenceStore를 확정하고,
+P0-7에서 I3/I4 thin CI wrapper를 구현한다.
+
 ## 2. 🔴 아직 안 한 것 — 다음 세션이 할 일
 
-**P0-3 ~ P0-7 (팀원3 Phase 0)이 미착수다.** `docs/TASK_CARDS_v2_2.md` 의 카드를 쓴다.
+**P0-4 ~ P0-7 (팀원3 Phase 0)이 미착수다.** `docs/TASK_CARDS_v2_2.md` 의 카드를 쓴다.
 
 ```
 P0-1  ✅ 완료
 P0-2  ✅ 완료 — state.py + 리듀서5 + 계약 테스트 25건
-P0-3  contexts/{views,budget}.py + protocols  🔴 View 금지필드           opus-5
+P0-3  ✅ 완료 — Context/View/Budget + Protocol 5종 + 계약 테스트 28건
 P0-4  adapters/{base,mock}.py + assemble      참조 구현                  sonnet-5
 P0-5  models/gateway.py + 조립기3종           🔴 union 검사              opus-5
 P0-6  tests/adapters/test_contract.py         12개 테스트                sonnet-5
