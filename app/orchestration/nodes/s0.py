@@ -120,6 +120,15 @@ async def _invoke(deps: RuntimeDeps, node: str, slot: str, view, schema):
 
 
 def make_nodes(deps: RuntimeDeps):
+    async def canonical_claims(claim_ids: list[str]):
+        if len(claim_ids) != len(set(claim_ids)):
+            raise ValueError("duplicate claim reference")
+        claims = await deps.review_store.get_claims(claim_ids)
+        by_id = {item.claim_id: item for item in claims}
+        if len(by_id) != len(claims) or set(by_id) != set(claim_ids):
+            raise ValueError("claim reference coverage mismatch")
+        return [by_id[claim_id] for claim_id in claim_ids]
+
     async def n0(state: ReviewState, runtime: Runtime[ReviewRequestContext]):
         if runtime.context is None:
             raise ValueError("ReviewRequestContext.raw_text is required")
@@ -284,18 +293,27 @@ def make_nodes(deps: RuntimeDeps):
         }
 
     async def n5(state: ReviewState):
+        try:
+            claims = await canonical_claims(state["claim_ids"])
+        except (KeyError, ValueError):
+            return {
+                "node_results": [
+                    f"n5:block:{ReasonCode.CONTRACT_VIOLATION.value}"
+                ]
+            }
         queries = [
             Query(
                 query_id=deps.id_factory(),
                 scope="claim",
-                claim_id=claim_id,
+                claim_id=claim.claim_id,
                 intent="verify",
                 provider="dart",
                 endpoint="disclosure",
                 params={"stock_code": state["stock"]["code"]},
                 created_at=deps.clock(),
             )
-            for claim_id in state["claim_ids"]
+            for claim in claims
+            if claim.verifiable
         ]
         ids = await deps.evidence_store.put_queries(state["run_id"], queries)
         return {"query_ids": ids, "node_results": ["n5:ok"]}
@@ -335,9 +353,26 @@ def make_nodes(deps: RuntimeDeps):
         }
 
     async def n7(state: ReviewState):
-        claims = await deps.review_store.get_claims(state["claim_ids"])
+        claims = await canonical_claims(state["claim_ids"])
+        queries = await deps.evidence_store.get_queries(state["query_ids"])
+        query_by_claim = {}
+        for query in queries:
+            if query.scope != "claim":
+                continue
+            if query.claim_id in query_by_claim:
+                raise RuntimeError(ReasonCode.CONTRACT_VIOLATION.value)
+            query_by_claim[query.claim_id] = query.query_id
+        llm_calls = 0
+        degraded = False
         for claim in claims:
+            if not claim.verifiable:
+                continue
             evidence_ids = await deps.evidence_store.evidence_ids_for_claim(claim.claim_id)
+            if not evidence_ids:
+                continue
+            query_id = query_by_claim.get(claim.claim_id)
+            if query_id is None:
+                raise RuntimeError(ReasonCode.CONTRACT_VIOLATION.value)
             evidence = await deps.evidence_store.get_many(evidence_ids)
             view = EvidencePacket(
                 claim=ClaimView(
@@ -353,10 +388,11 @@ def make_nodes(deps: RuntimeDeps):
                 ],
             )
             draft = None
+            mapping = {evidence_id: query_id for evidence_id in evidence_ids}
             for _ in range(2):
                 candidate, _ = await _invoke(deps, "n7", "SMALL", view, ClaimStanceDraft)
+                llm_calls += 1
                 try:
-                    mapping = {eid: state["query_ids"][0] for eid in evidence_ids}
                     items = assemble_claim_evidence(
                         candidate, claim.claim_id, evidence_ids, mapping
                     )
@@ -369,17 +405,33 @@ def make_nodes(deps: RuntimeDeps):
                 draft = assemble_unknown_claim_evidence_fallback(
                     claim.claim_id, evidence_ids, mapping
                 )
+                degraded = True
             await deps.review_store.put_claim_evidence(state["run_id"], draft)
-        degraded = any(item.stance_source == "rule" for item in draft)
-        return {
+        patch = {
             "node_results": ["n7:partial" if degraded else "n7:ok"],
-            "counters": {"llm_calls": 2 if degraded else 1},
         }
+        if llm_calls:
+            patch["counters"] = {"llm_calls": llm_calls}
+        return patch
 
     async def n8(state: ReviewState):
         evaluations = []
-        for claim in await deps.review_store.get_claims(state["claim_ids"]):
+        llm_calls = 0
+        for claim in await canonical_claims(state["claim_ids"]):
+            if not claim.verifiable:
+                continue
             evidence_ids = await deps.evidence_store.evidence_ids_for_claim(claim.claim_id)
+            if not evidence_ids:
+                evaluations.append(
+                    assemble_unverifiable_evaluation_fallback(
+                        claim_id=claim.claim_id,
+                        packet_evidence_ids=[],
+                        numeric_checks=[],
+                        claim_evaluation_id=deps.id_factory(),
+                        created_at=deps.clock(),
+                    )
+                )
+                continue
             evidence = await deps.evidence_store.get_many(evidence_ids)
             links = await deps.review_store.get_claim_evidence(state["run_id"], claim.claim_id)
             stance = {item.evidence_id: item.stance for item in links}
@@ -401,6 +453,7 @@ def make_nodes(deps: RuntimeDeps):
             assembled = None
             for _ in range(2):
                 candidate, _ = await _invoke(deps, "n8", "LARGE", view, ClaimEvaluationDraft)
+                llm_calls += 1
                 try:
                     assembled = assemble_claim_evaluation(
                         candidate, claim.claim_id, evidence_ids, [], deps.id_factory(), deps.clock()
@@ -422,31 +475,107 @@ def make_nodes(deps: RuntimeDeps):
         degraded = any(
             ReasonCode.COVERAGE_TRUNCATED in item.uncertainty_codes for item in evaluations
         )
-        return {
+        patch = {
             "claim_evaluation_ids": ids,
             "node_results": ["n8:partial" if degraded else "n8:ok"],
-            "counters": {"llm_calls": 2 if degraded else 1},
         }
+        if llm_calls:
+            patch["counters"] = {"llm_calls": llm_calls}
+        return patch
 
     async def n9(state: ReviewState):
         evaluations = await deps.review_store.get_claim_evaluations(state["claim_evaluation_ids"])
+        claims = await canonical_claims(state["claim_ids"])
+        evaluations_by_claim = {item.claim_id: item for item in evaluations}
+        if len(evaluations_by_claim) != len(evaluations):
+            return {
+                "node_results": [
+                    f"n9:block:{ReasonCode.CONTRACT_VIOLATION.value}"
+                ]
+            }
+        queries = await deps.evidence_store.get_queries(state["query_ids"])
+        queried_claim_ids = {
+            item.claim_id for item in queries if item.scope == "claim"
+        }
+        deterministic_drafts = []
+        evidence_backed = []
+        for claim in claims:
+            if not claim.verifiable:
+                continue
+            if claim.claim_id not in queried_claim_ids:
+                return {
+                    "node_results": [
+                        f"n9:block:{ReasonCode.CONTRACT_VIOLATION.value}"
+                    ]
+                }
+            evaluation = evaluations_by_claim.get(claim.claim_id)
+            if evaluation is None:
+                return {
+                    "node_results": [
+                        f"n9:block:{ReasonCode.CONTRACT_VIOLATION.value}"
+                    ]
+                }
+            evidence_ids = await deps.evidence_store.evidence_ids_for_claim(
+                claim.claim_id
+            )
+            if evidence_ids:
+                evidence_backed.append(evaluation)
+            else:
+                deterministic_drafts.append(
+                    FindingDraft(
+                        slot_id=claim.slot_id,
+                        kind="unverified",
+                        citations=[],
+                        claim_evaluation_id=evaluation.claim_evaluation_id,
+                    )
+                )
         view = IntegrationView(
-            evaluations=evaluations,
+            evaluations=evidence_backed,
             oppose=OpposeBlock(status="verified", count=0, queries=["반대 근거 검색"]),
             missing_slots=[],
         )
+        if not evidence_backed:
+            ids = [deps.id_factory() for _ in deterministic_drafts]
+            findings = assemble_findings(
+                deterministic_drafts, evaluations, ids, deps.clock()
+            )
+            stored_ids = await deps.review_store.put_findings(
+                state["run_id"], findings
+            )
+            return {
+                "finding_ids": stored_ids,
+                "oppose": view.oppose.model_dump(),
+                "node_results": [
+                    f"n9:block:{ReasonCode.EVIDENCE_INSUFFICIENT.value}"
+                ],
+            }
         drafts = None
         for _ in range(2):
             candidate, _ = await _invoke(deps, "n9", "LARGE", view, FindingDraft)
-            values = [candidate]
+            values = [*deterministic_drafts, candidate]
             try:
-                drafts = assemble_findings(values, evaluations, [deps.id_factory()], deps.clock())
+                drafts = assemble_findings(
+                    values,
+                    evaluations,
+                    [deps.id_factory() for _ in values],
+                    deps.clock(),
+                )
                 break
             except AssemblyError as exc:
                 if not exc.retryable:
                     raise
         if drafts is None:
-            drafts = omit_invalid_findings_fallback()
+            values = deterministic_drafts
+            drafts = (
+                assemble_findings(
+                    values,
+                    evaluations,
+                    [deps.id_factory() for _ in values],
+                    deps.clock(),
+                )
+                if values
+                else omit_invalid_findings_fallback()
+            )
         ids = await deps.review_store.put_findings(state["run_id"], drafts)
         return {
             "finding_ids": ids,

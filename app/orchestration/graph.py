@@ -24,8 +24,10 @@ def build_graph(deps: RuntimeDeps, *, checkpointer=None):
     graph.add_conditional_edges("n3", lambda s: "n5" if s["claim_ids"] else "n4")
     graph.add_edge("n4", "n3b")
     graph.add_conditional_edges("n3b", lambda s: "n12" if _blocked(s) else "n5")
-    for left, right in (("n5", "n6"), ("n6", "n7"), ("n7", "n8"), ("n8", "n9"), ("n9", "n11")):
+    graph.add_conditional_edges("n5", lambda s: "n12" if _blocked(s) else "n6")
+    for left, right in (("n6", "n7"), ("n7", "n8"), ("n8", "n9")):
         graph.add_edge(left, right)
+    graph.add_conditional_edges("n9", lambda s: "n12" if _blocked(s) else "n11")
     graph.add_conditional_edges("n11", lambda s: "n12" if s.get("report_id") else "n10")
     graph.add_conditional_edges("n10", lambda s: "n11" if not _blocked(s) else "n12")
     graph.add_edge("n12", END)
