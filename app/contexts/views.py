@@ -82,6 +82,16 @@ class SlotContext(_ViewModel):
     slot_definitions: list[SlotDefinitionView]
 
 
+class SemanticSegmentView(_ViewModel):
+    segment_id: NonBlankStr
+    locked_slot_id: SlotId | None = None
+    text: NonBlankStr
+
+
+class SemanticExtractionView(_ViewModel):
+    segments: tuple[SemanticSegmentView, ...]
+
+
 class AskBackContext(_ViewModel):
     missing_slots: list[MissingSlotView]
 

@@ -12,6 +12,7 @@ from app.contexts.budget import (
     ctx_chars,
     ctx_items,
     truncate,
+    validate_context_budget,
     validate_evidence_counts,
 )
 from app.contexts.views import (
@@ -25,6 +26,8 @@ from app.contexts.views import (
     IntegrationView,
     MissingSlotView,
     RenderView,
+    SemanticExtractionView,
+    SemanticSegmentView,
     SlotContext,
     SlotDefinitionView,
     VerifyPacket,
@@ -102,6 +105,63 @@ def test_ctx_items는_노드별_반복_단위만_세고_Claim은_제외한다():
     ) == 0
     assert ctx_items(GuardBatchEnvelope(items=[guard])) == 1
     assert ctx_items(RenderView(slots=[], banners=[], theory_notes=[], citations=[])) == 0
+    assert ctx_items(
+        SemanticExtractionView(
+            segments=(
+                SemanticSegmentView(segment_id="structured:4", locked_slot_id=4, text="이유"),
+                SemanticSegmentView(segment_id="free_text:0", text="기대"),
+            )
+        )
+    ) == 2
+
+
+def test_n3_semantic_View는_8_items와_6000_chars_경계를_허용한다():
+    eight_segments = tuple(
+        SemanticSegmentView(segment_id=f"free_text:{index}", text="판단")
+        for index in range(8)
+    )
+    view = SemanticExtractionView(segments=eight_segments)
+    validate_context_budget("n3", view)
+
+    json_overhead = len('{"segments":[{"segment_id":"x","text":""}]}')
+    exact = SemanticExtractionView(
+        segments=(
+            SemanticSegmentView(segment_id="x", text="가" * (6000 - json_overhead)),
+        )
+    )
+    assert ctx_chars(exact) == 6000
+    validate_context_budget("n3", exact)
+
+
+def test_n3_semantic_View는_item과_char_초과를_절단없이_거부한다():
+    nine_segments = tuple(
+        SemanticSegmentView(segment_id=f"free_text:{index}", text="판단")
+        for index in range(9)
+    )
+    item_over = SemanticExtractionView(segments=nine_segments)
+    with pytest.raises(ValueError, match="item budget"):
+        validate_context_budget("n3", item_over)
+    assert len(item_over.segments) == 9
+
+    json_overhead = len('{"segments":[{"segment_id":"x","text":""}]}')
+    char_over = SemanticExtractionView(
+        segments=(
+            SemanticSegmentView(segment_id="x", text="가" * (6001 - json_overhead)),
+        )
+    )
+    with pytest.raises(ValueError, match="char budget"):
+        validate_context_budget("n3", char_over)
+    assert ctx_chars(char_over) == 6001
+
+
+def test_SemanticExtractionView의_unicode도_직렬화된_문자수로_계산한다():
+    view = SemanticExtractionView(
+        segments=(SemanticSegmentView(segment_id="free_text:0", text="삼성전자 😀"),)
+    )
+    payload = view.model_dump_json(exclude_none=True)
+
+    assert "삼성전자 😀" in payload
+    assert ctx_chars(view) == len(payload)
 
 
 def test_RenderView_guard_feedback은_n11_예산_안에_포함된다():

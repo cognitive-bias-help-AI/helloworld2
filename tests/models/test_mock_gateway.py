@@ -1,7 +1,8 @@
 import pytest
 
 from app.contexts.budget import ctx_chars
-from app.contexts.views import GuardScanView
+from app.contexts.views import GuardScanView, SemanticExtractionView, SemanticSegmentView
+from app.domain.semantic import SemanticKind
 from app.models.mock import MockModelGateway
 from app.orchestration.drafts import (
     AskBackDraft,
@@ -9,6 +10,8 @@ from app.orchestration.drafts import (
     GuardScanResult,
     GuardVerdictDraft,
     RenderDraft,
+    SemanticExtractionDraft,
+    SemanticUnitDraft,
     SlotExtractionDraft,
 )
 from app.schemas.frozen import ClaimEvaluation, ClaimEvaluationDraft, ClaimStanceDraft, Finding
@@ -19,6 +22,7 @@ from app.schemas.frozen import ClaimEvaluation, ClaimEvaluationDraft, ClaimStanc
     "response",
     [
         GuardScanResult(), SlotExtractionDraft(claims=[]), AskBackDraft(questions=[]),
+        SemanticExtractionDraft(units=[]),
         ClaimStanceDraft(stances=[]),
         ClaimEvaluationDraft(citations=[], support_evidence_ids=[], oppose_evidence_ids=[],
                              unknown_evidence_ids=[], verdict="unverifiable",
@@ -27,13 +31,48 @@ from app.schemas.frozen import ClaimEvaluation, ClaimEvaluationDraft, ClaimStanc
         GuardVerdictDraft(violations=[]), RenderDraft(slots=[]),
     ],
 )
-async def test_MockModelGateway는_정확히_8종_Draft를_반환하고_Usage를_계산한다(response):
+async def test_MockModelGateway는_정확히_9종_Draft를_반환하고_Usage를_계산한다(response):
     view = GuardScanView(masked_input="검토")
     gateway = MockModelGateway({type(response): response})
     actual, usage = await gateway.invoke("SMALL", "n1/v1", view, type(response))
     assert actual == response and actual is not response
     assert usage.model_slot == "SMALL" and usage.ctx_chars == ctx_chars(view)
     assert usage.prompt_tokens == usage.output_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_n3_v2는_SMALL과_SemanticExtractionDraft_경계를_표현한다():
+    view = SemanticExtractionView(
+        segments=(
+            SemanticSegmentView(
+                segment_id="structured:4",
+                locked_slot_id=4,
+                text="HBM 공급이 부족하다",
+            ),
+        )
+    )
+    response = SemanticExtractionDraft(
+        units=[
+            SemanticUnitDraft(
+                segment_id="structured:4",
+                slot_id=4,
+                text_span="HBM 공급이 부족하다",
+                span_offset=(0, 12),
+                normalized_proposition="HBM 공급이 부족하다",
+                proposed_value=None,
+                semantic_kind=SemanticKind.EXTERNAL_ASSERTION,
+            )
+        ]
+    )
+    gateway = MockModelGateway({SemanticExtractionDraft: response})
+
+    actual, usage = await gateway.invoke(
+        "SMALL", "n3/v2", view, SemanticExtractionDraft
+    )
+
+    assert actual == response
+    assert usage.model_slot == "SMALL"
+    assert usage.ctx_chars == ctx_chars(view)
 
 
 @pytest.mark.asyncio

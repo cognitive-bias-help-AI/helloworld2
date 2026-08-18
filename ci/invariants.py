@@ -116,9 +116,9 @@ def check_i3() -> CheckResult:
 
 def check_i4() -> CheckResult:
     return _pytest_result(
-        "tests/contexts/test_views.py::test_8개_semantic_View의_허용_필드가_고정된다",
+        "tests/contexts/test_views.py::test_9개_semantic_View의_허용_필드가_고정된다",
         CheckStatus.PASS,
-        "existing exact model_fields contract passes for all eight semantic Views",
+        "legacy and semantic n3/v2 exact contracts pass for all nine semantic Views",
     )
 
 

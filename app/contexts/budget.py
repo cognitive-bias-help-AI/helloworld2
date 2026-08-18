@@ -15,6 +15,7 @@ from app.contexts.views import (
     GuardScanView,
     IntegrationView,
     RenderView,
+    SemanticExtractionView,
     SlotContext,
     VerifyPacket,
 )
@@ -55,6 +56,8 @@ def ctx_items(view: BaseModel) -> int:
         return 0
     if isinstance(view, SlotContext):
         return len(view.slot_definitions)
+    if isinstance(view, SemanticExtractionView):
+        return len(view.segments)
     if isinstance(view, AskBackContext):
         return len(view.missing_slots)
     if isinstance(view, EvidencePacket | VerifyPacket):
@@ -66,6 +69,22 @@ def ctx_items(view: BaseModel) -> int:
     if isinstance(view, RenderView):
         return len(view.slots)
     raise TypeError(f"지원하지 않는 Context View: {type(view).__name__}")
+
+
+def validate_context_budget(node: str, view: BaseModel) -> None:
+    """모델 호출 전 View의 item/character 예산을 절단 없이 검증한다."""
+
+    try:
+        budget = NODE_BUDGETS[node]
+    except KeyError as exc:
+        raise ValueError(f"알 수 없는 node budget: {node}") from exc
+
+    items = ctx_items(view)
+    chars = ctx_chars(view)
+    if budget.items is not None and items > budget.items:
+        raise ValueError(f"{node} item budget 초과: {items}>{budget.items}")
+    if chars > budget.chars:
+        raise ValueError(f"{node} char budget 초과: {chars}>{budget.chars}")
 
 
 def validate_evidence_counts(*, claim_count: int, stock_count: int) -> None:

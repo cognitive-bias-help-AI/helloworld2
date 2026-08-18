@@ -11,6 +11,7 @@ from app.orchestration.drafts import (
     GuardScanResult,
     GuardVerdictDraft,
     RenderDraft,
+    SemanticExtractionDraft,
     SlotExtractionDraft,
 )
 from app.schemas.frozen import ClaimEvaluationDraft, ClaimStanceDraft, Usage
@@ -19,6 +20,7 @@ _ALLOWED_OUTPUTS: frozenset[type[BaseModel]] = frozenset(
     {
         GuardScanResult,
         SlotExtractionDraft,
+        SemanticExtractionDraft,
         AskBackDraft,
         ClaimStanceDraft,
         ClaimEvaluationDraft,

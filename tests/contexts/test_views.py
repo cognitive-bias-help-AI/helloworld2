@@ -19,6 +19,8 @@ from app.contexts.views import (
     MissingSlotView,
     RenderCitationView,
     RenderView,
+    SemanticExtractionView,
+    SemanticSegmentView,
     SlotContext,
     SlotDefinitionView,
     SlotTextView,
@@ -105,7 +107,7 @@ def test_VerifyPacket은_n7의_oppose_stance를_같은_Evidence_ID와_함께_보
     assert packet.evidence[0].stance == "oppose"
 
 
-def test_8개_semantic_View의_허용_필드가_고정된다():
+def test_9개_semantic_View의_허용_필드가_고정된다():
     expected = {
         GuardScanView: {"masked_input"},
         SlotContext: {"masked_input", "slot_definitions"},
@@ -115,9 +117,66 @@ def test_8개_semantic_View의_허용_필드가_고정된다():
         IntegrationView: {"evaluations", "oppose", "missing_slots"},
         GuardInput: {"slot_no", "text", "quoted", "citations"},
         RenderView: {"slots", "banners", "theory_notes", "citations", "guard_feedback"},
+        SemanticExtractionView: {"segments"},
     }
 
     assert {model: set(model.model_fields) for model in expected} == expected
+
+
+def test_SemanticExtractionView는_최소_segment_projection만_허용한다():
+    structured = SemanticSegmentView(
+        segment_id="structured:4",
+        locked_slot_id=4,
+        text="HBM 공급이 부족하다",
+    )
+    free_text = SemanticSegmentView(
+        segment_id="free_text:0",
+        locked_slot_id=None,
+        text="장기로 보고 있다 😀",
+    )
+    view = SemanticExtractionView(segments=(structured, free_text))
+
+    assert set(SemanticSegmentView.model_fields) == {
+        "segment_id",
+        "locked_slot_id",
+        "text",
+    }
+    assert view.segments == (structured, free_text)
+    assert view.model_dump(mode="json") == {
+        "segments": [
+            {
+                "segment_id": "structured:4",
+                "locked_slot_id": 4,
+                "text": "HBM 공급이 부족하다",
+            },
+            {
+                "segment_id": "free_text:0",
+                "locked_slot_id": None,
+                "text": "장기로 보고 있다 😀",
+            },
+        ]
+    }
+    assert not {
+        "origin",
+        "target",
+        "verifiable",
+        "anchor_start",
+        "anchor_end",
+        "state",
+    } & set(SemanticSegmentView.model_fields)
+
+
+def test_SemanticExtractionView는_extra와_변경을_거부한다():
+    segment = SemanticSegmentView(segment_id="free_text:0", text="검토 이유")
+
+    with pytest.raises(ValidationError):
+        SemanticSegmentView(segment_id="free_text:0", text="검토 이유", origin="user")
+    with pytest.raises(ValidationError):
+        SemanticExtractionView(segments=(segment,), target="005930")
+
+    view = SemanticExtractionView(segments=(segment,))
+    with pytest.raises(ValidationError):
+        view.segments = ()
 
 
 def test_semantic_View를_실제_frozen_계약으로_구성할_수_있다():
