@@ -35,6 +35,8 @@ from app.contexts.views import (
     SlotTextView,
     VerifyPacket,
 )
+from app.domain.intake import FreeTextInput, HybridIntake, IntakeMode
+from app.domain.slots import get_slot_definition
 from app.gateway.assemble import assemble_evidence
 from app.orchestration.drafts import (
     AskBackDraft,
@@ -70,6 +72,20 @@ def _mask(value: str) -> str:
     return re.sub(r"\b01[016789]-?\d{3,4}-?\d{4}\b", "[PHONE]", value)
 
 
+def _sanitize_intake(intake: HybridIntake) -> HybridIntake:
+    structured = tuple(
+        item.model_copy(update={"value": _mask(item.value)})
+        if isinstance(item.value, str)
+        and get_slot_definition(item.slot_id).value_shape == "text"
+        else item
+        for item in intake.structured
+    )
+    free_text = tuple(
+        item.model_copy(update={"text": _mask(item.text)}) for item in intake.free_text
+    )
+    return intake.model_copy(update={"structured": structured, "free_text": free_text})
+
+
 def _budget(node: str, view) -> None:
     limit = NODE_BUDGETS[node]
     if ctx_chars(view) > limit.chars or (limit.items is not None and ctx_items(view) > limit.items):
@@ -83,15 +99,39 @@ async def _invoke(deps: RuntimeDeps, node: str, slot: str, view, schema):
 
 def make_nodes(deps: RuntimeDeps):
     async def n0(state: ReviewState, runtime: Runtime[ReviewRequestContext]):
-        if runtime.context is None or not runtime.context.raw_text.strip():
+        if runtime.context is None:
             raise ValueError("ReviewRequestContext.raw_text is required")
-        masked = _mask(runtime.context.raw_text)
-        input_id = await deps.review_store.put_input(state["run_id"], {"masked_input": masked})
+        if runtime.context.intake is not None:
+            intake = runtime.context.intake
+        else:
+            raw_text = runtime.context.raw_text
+            if raw_text is None or not raw_text.strip():
+                raise ValueError("ReviewRequestContext.raw_text is required")
+            intake = HybridIntake(
+                schema_version="hybrid_intake/v1",
+                mode=IntakeMode.CHAT_FIRST,
+                free_text=(
+                    FreeTextInput(text=raw_text, source=SourceTrace.CHAT_EXPLICIT),
+                ),
+            )
+        intake = _sanitize_intake(intake)
+        body = {
+            "schema_version": intake.schema_version,
+            "masked_intake": intake.model_dump(mode="json", exclude={"schema_version"}),
+            "masked_input": "\n".join(item.text for item in intake.free_text),
+        }
+        input_id = await deps.review_store.put_input(state["run_id"], body)
         return {"input_id": input_id, "node_results": ["n0:ok"]}
 
     async def n1(state: ReviewState):
         body = await deps.review_store.get_input(state["input_id"])
-        result, _ = await _invoke(deps, "n1", "SMALL", GuardScanView(**body), GuardScanResult)
+        result, _ = await _invoke(
+            deps,
+            "n1",
+            "SMALL",
+            GuardScanView(masked_input=body["masked_input"]),
+            GuardScanResult,
+        )
         suffix = "ok" if result.reason_code is None else f"block:{result.reason_code.value}"
         return {"node_results": [f"n1:{suffix}"], "counters": {"llm_calls": 1}}
 
