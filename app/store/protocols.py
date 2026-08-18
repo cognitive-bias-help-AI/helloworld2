@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from app.domain.slot_context import SlotValueObservation
 from app.schemas.frozen import (
     Claim,
     ClaimEvaluation,
@@ -63,3 +64,11 @@ class ReviewStore(Protocol):
     async def put_report(self, run_id: str, body: dict) -> str: ...
 
     async def get_report(self, report_id: str) -> dict | None: ...
+
+    async def put_slot_observations(
+        self, run_id: str, items: list[SlotValueObservation]
+    ) -> list[str]: ...
+
+    async def get_slot_observations(
+        self, run_id: str
+    ) -> list[SlotValueObservation]: ...

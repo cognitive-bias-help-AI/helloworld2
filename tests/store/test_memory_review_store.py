@@ -1,6 +1,12 @@
 import asyncio
+import copy
 from datetime import UTC, datetime
 
+import pytest
+
+from app.domain.intake import ResponseState
+from app.domain.semantic_source import SemanticTextRef
+from app.domain.slot_context import ExtractionMethod, build_slot_observation
 from app.schemas.frozen import Claim, ClaimEvaluation, ClaimEvidence, Finding, SourceTrace
 from app.store.memory_review_store import MemoryReviewStore
 
@@ -41,7 +47,7 @@ def evaluation(n, claim_id):
     )
 
 
-def test_ReviewStore_12개_method와_본문_claim_finding_report를_왕복한다():
+def test_ReviewStore_14개_method와_7개_persistence_area를_왕복한다():
     store = MemoryReviewStore()
     c = claim()
     f = Finding(finding_id=U(4), slot_id=3, kind="missing", citations=[], created_at=NOW)
@@ -78,3 +84,97 @@ def test_claim_evaluation은_run_claim별_current_upsert다():
     assert run(
         store.get_claim_evaluations([second.claim_evaluation_id, other.claim_evaluation_id])
     ) == [second, other]
+
+
+def observation(run_id="r", *, value="LONG", origin=SourceTrace.SURVEY, text_ref=None):
+    return build_slot_observation(
+        run_id,
+        slot_id=3,
+        response_state=ResponseState.ANSWERED,
+        origin=origin,
+        extraction_method=(
+            ExtractionMethod.LLM
+            if origin is SourceTrace.CHAT_EXPLICIT
+            else ExtractionMethod.DIRECT
+        ),
+        value=value,
+        text_ref=text_ref,
+    )
+
+
+def test_put_input은_same_run_same_canonical_body만_exact_replay한다():
+    store = MemoryReviewStore()
+    body = {"nested": {"values": [1, 2]}, "mode": "HYBRID"}
+
+    first = run(store.put_input("r", body))
+    second = run(
+        store.put_input("r", {"mode": "HYBRID", "nested": {"values": [1, 2]}})
+    )
+
+    assert first == second
+    with pytest.raises(ValueError, match="input run/payload conflict"):
+        run(store.put_input("r", {"nested": {"values": [1, 3]}, "mode": "HYBRID"}))
+
+
+def test_put_input과_get_input은_nested_body를_deep_isolate한다():
+    store = MemoryReviewStore()
+    body = {"nested": {"values": [1, 2]}}
+    expected = copy.deepcopy(body)
+
+    input_id = run(store.put_input("r", body))
+    body["nested"]["values"].append(3)
+    fetched = run(store.get_input(input_id))
+    fetched["nested"]["values"].append(4)
+
+    assert run(store.get_input(input_id)) == expected
+
+
+def test_slot_observation_exact_replay는_duplicate없이_삽입순서를_보존한다():
+    store = MemoryReviewStore()
+    survey = observation()
+    chat = observation(
+        origin=SourceTrace.CHAT_EXPLICIT,
+        text_ref=SemanticTextRef(
+            segment_id="free_text:0", local_start=0, local_end=4
+        ),
+    )
+
+    assert run(store.put_slot_observations("r", [chat, survey])) == [
+        chat.observation_id,
+        survey.observation_id,
+    ]
+    assert run(store.put_slot_observations("r", [chat, survey])) == [
+        chat.observation_id,
+        survey.observation_id,
+    ]
+    assert run(store.get_slot_observations("r")) == [chat, survey]
+
+
+def test_slot_observation_ID_payload_run_hash_conflict를_모두_거부한다():
+    store = MemoryReviewStore()
+    item = observation()
+    run(store.put_slot_observations("r", [item]))
+
+    changed_body = item.model_copy(update={"value": "SHORT"})
+    with pytest.raises(ValueError, match="observation_id ownership/payload conflict"):
+        run(store.put_slot_observations("r", [changed_body]))
+
+    with pytest.raises(ValueError, match="observation_id ownership/payload conflict"):
+        run(store.put_slot_observations("other", [item]))
+
+    wrong_id = item.model_copy(update={"observation_id": U(8)})
+    with pytest.raises(ValueError, match="content hash/ID conflict"):
+        run(store.put_slot_observations("r", [wrong_id]))
+
+
+def test_slot_observation_batch_conflict는_partial_write를_남기지_않는다():
+    store = MemoryReviewStore()
+    existing = observation()
+    run(store.put_slot_observations("r", [existing]))
+    new_item = observation(value="SHORT")
+    conflict = existing.model_copy(update={"value": "MEDIUM"})
+
+    with pytest.raises(ValueError, match="observation_id ownership/payload conflict"):
+        run(store.put_slot_observations("r", [new_item, conflict]))
+
+    assert run(store.get_slot_observations("r")) == [existing]

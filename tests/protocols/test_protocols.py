@@ -9,6 +9,7 @@ from typing import Literal, get_type_hints
 import pytest
 from pydantic import BaseModel
 
+from app.domain.slot_context import SlotValueObservation
 from app.gateway.protocols import ProviderAdapter, ReplayCache
 from app.models.protocols import ModelGateway
 from app.schemas.frozen import (
@@ -75,7 +76,7 @@ def test_EvidenceStore는_DDR의_8개_async_메서드와_domain_type을_고정�
     assert get_type_hints(EvidenceStore.link)["pairs"] == list[EvidenceQueryLink]
 
 
-def test_ReviewStore는_판단_본문_6영역의_12개_async_메서드를_고정한다():
+def test_ReviewStore는_판단_본문_7영역의_14개_async_메서드를_고정한다():
     expected = {
         "put_input": ["self", "run_id", "body"],
         "get_input": ["self", "input_id"],
@@ -89,6 +90,8 @@ def test_ReviewStore는_판단_본문_6영역의_12개_async_메서드를_고정
         "get_findings": ["self", "ids"],
         "put_report": ["self", "run_id", "body"],
         "get_report": ["self", "report_id"],
+        "put_slot_observations": ["self", "run_id", "items"],
+        "get_slot_observations": ["self", "run_id"],
     }
     assert {name for name in ReviewStore.__dict__ if not name.startswith("_")} == set(expected)
     for name, parameters in expected.items():
@@ -104,6 +107,12 @@ def test_ReviewStore는_판단_본문_6영역의_12개_async_메서드를_고정
     assert get_type_hints(ReviewStore.get_claim_evaluations)["return"] == list[ClaimEvaluation]
     assert get_type_hints(ReviewStore.put_findings)["items"] == list[Finding]
     assert get_type_hints(ReviewStore.get_findings)["return"] == list[Finding]
+    assert get_type_hints(ReviewStore.put_slot_observations)["items"] == list[
+        SlotValueObservation
+    ]
+    assert get_type_hints(ReviewStore.get_slot_observations)["return"] == list[
+        SlotValueObservation
+    ]
 
 
 def test_ProviderAdapter는_Evidence가_아닌_EvidenceDraft_경계를_고정한다():
