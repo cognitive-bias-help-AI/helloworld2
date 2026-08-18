@@ -1,6 +1,7 @@
 import pytest
 
 from app.domain.protocols import StockResolver
+from app.domain.stock_scope import AssetType, InstrumentCandidate
 from app.orchestration.hitl import StockChoiceRequest, StockChoiceResume, select_stock
 from app.schemas.frozen import StockCandidate
 from tests.s0.fakes import FixtureStockResolver
@@ -11,9 +12,18 @@ def candidate(code: str, name: str) -> StockCandidate:
 
 
 def test_fixture_resolver_is_deterministic_and_satisfies_port():
-    resolver = FixtureStockResolver({"삼성": [candidate("005930", "삼성전자")]})
+    exact = InstrumentCandidate(
+        code="005930",
+        name="삼성전자",
+        market="KOSPI",
+        asset_type=AssetType.COMMON_STOCK,
+    )
+    resolver = FixtureStockResolver(
+        {"삼성": [candidate("005930", "삼성전자")]}, {"005930": [exact]}
+    )
     assert isinstance(resolver, StockResolver)
     assert resolver.resolve("삼성") == resolver.resolve("삼성")
+    assert resolver.resolve_exact("005930") == resolver.resolve_exact("005930")
 
 
 def test_stock_choice_contract_is_minimal_and_json_safe():

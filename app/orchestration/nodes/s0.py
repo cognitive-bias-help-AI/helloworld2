@@ -7,6 +7,7 @@ from hashlib import sha256
 
 from langgraph.runtime import Runtime
 from langgraph.types import interrupt
+from pydantic import ValidationError
 
 from app.assemblers.claim_evaluation import assemble_claim_evaluation
 from app.assemblers.claim_evidence import assemble_claim_evidence
@@ -35,8 +36,9 @@ from app.contexts.views import (
     SlotTextView,
     VerifyPacket,
 )
-from app.domain.intake import FreeTextInput, HybridIntake, IntakeMode
+from app.domain.intake import FreeTextInput, HybridIntake, IntakeMode, TargetSecurityInput
 from app.domain.slots import get_slot_definition
+from app.domain.stock_scope import evaluate_stock_scope
 from app.gateway.assemble import assemble_evidence
 from app.orchestration.drafts import (
     AskBackDraft,
@@ -63,6 +65,7 @@ from app.schemas.frozen import (
     Query,
     ReasonCode,
     SourceTrace,
+    StockCandidate,
 )
 
 
@@ -159,6 +162,53 @@ def make_nodes(deps: RuntimeDeps):
 
     async def n2(state: ReviewState):
         body = await deps.review_store.get_input(state["input_id"])
+        target_body = body.get("masked_intake", {}).get("target")
+        if target_body is not None:
+            try:
+                target = TargetSecurityInput.model_validate(target_body)
+            except ValidationError:
+                return {
+                    "node_results": [
+                        f"n2:block:{ReasonCode.STOCK_UNRESOLVED.value}"
+                    ]
+                }
+            if target.selected_code is None:
+                return {
+                    "node_results": [
+                        f"n2:block:{ReasonCode.STOCK_UNRESOLVED.value}"
+                    ]
+                }
+            exact = deps.stock_resolver.resolve_exact(target.selected_code)
+            if len(exact) > 1 or (
+                len(exact) == 1 and exact[0].code != target.selected_code
+            ):
+                return {
+                    "node_results": [
+                        f"n2:block:{ReasonCode.CONTRACT_VIOLATION.value}"
+                    ]
+                }
+            if not exact:
+                return {
+                    "node_results": [
+                        f"n2:block:{ReasonCode.STOCK_UNRESOLVED.value}"
+                    ]
+                }
+            instrument = exact[0]
+            if not evaluate_stock_scope(instrument).supported:
+                return {
+                    "node_results": [f"n2:block:{ReasonCode.OUT_OF_SCOPE.value}"]
+                }
+            selected = StockCandidate(
+                code=instrument.code,
+                name=instrument.name,
+                market=instrument.market,
+                match_kind="exact_code",
+                score=1.0,
+                is_delisted=instrument.is_delisted,
+                is_managed=instrument.is_managed,
+            )
+            return {"stock": selected.model_dump(), "node_results": ["n2:ok"]}
+
         candidates = deps.stock_resolver.resolve(body["masked_input"])
         if not candidates:
             return {"node_results": [f"n2:block:{ReasonCode.STOCK_UNRESOLVED.value}"]}
