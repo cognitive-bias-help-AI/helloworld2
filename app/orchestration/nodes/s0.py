@@ -73,6 +73,11 @@ def _mask(value: str) -> str:
 
 
 def _sanitize_intake(intake: HybridIntake) -> HybridIntake:
+    target = (
+        intake.target.model_copy(update={"name": _mask(intake.target.name)})
+        if intake.target is not None and intake.target.name is not None
+        else intake.target
+    )
     structured = tuple(
         item.model_copy(update={"value": _mask(item.value)})
         if isinstance(item.value, str)
@@ -83,7 +88,21 @@ def _sanitize_intake(intake: HybridIntake) -> HybridIntake:
     free_text = tuple(
         item.model_copy(update={"text": _mask(item.text)}) for item in intake.free_text
     )
-    return intake.model_copy(update={"structured": structured, "free_text": free_text})
+    return intake.model_copy(
+        update={"target": target, "structured": structured, "free_text": free_text}
+    )
+
+
+def _security_projection(intake: HybridIntake) -> str:
+    segments = [intake.target.name] if intake.target is not None and intake.target.name else []
+    segments.extend(
+        item.value
+        for item in sorted(intake.structured, key=lambda item: item.slot_id)
+        if isinstance(item.value, str)
+        and get_slot_definition(item.slot_id).value_shape == "text"
+    )
+    segments.extend(item.text for item in intake.free_text)
+    return "\n".join(segment for segment in segments if segment)
 
 
 def _budget(node: str, view) -> None:
@@ -119,17 +138,20 @@ def make_nodes(deps: RuntimeDeps):
             "schema_version": intake.schema_version,
             "masked_intake": intake.model_dump(mode="json", exclude={"schema_version"}),
             "masked_input": "\n".join(item.text for item in intake.free_text),
+            "masked_security_input": _security_projection(intake),
         }
         input_id = await deps.review_store.put_input(state["run_id"], body)
         return {"input_id": input_id, "node_results": ["n0:ok"]}
 
     async def n1(state: ReviewState):
         body = await deps.review_store.get_input(state["input_id"])
+        if not body["masked_security_input"]:
+            return {"node_results": ["n1:ok"]}
         result, _ = await _invoke(
             deps,
             "n1",
             "SMALL",
-            GuardScanView(masked_input=body["masked_input"]),
+            GuardScanView(masked_input=body["masked_security_input"]),
             GuardScanResult,
         )
         suffix = "ok" if result.reason_code is None else f"block:{result.reason_code.value}"
