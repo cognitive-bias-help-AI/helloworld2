@@ -99,6 +99,7 @@ async def test_legacy_n0는_기존_masked_input과_sanitized_snapshot을_저장�
     assert body["masked_input"] == "삼성전자 [EMAIL] [PHONE]"
     assert body["masked_security_input"] == body["masked_input"]
     assert body["schema_version"] == "hybrid_intake/v1"
+    assert body["semantic_projection_version"] == "semantic_projection/v1"
     assert body["masked_intake"]["mode"] == "CHAT_FIRST"
     assert body["masked_intake"]["free_text"] == [
         {"text": "삼성전자 [EMAIL] [PHONE]", "source": "chat_explicit"}
@@ -133,6 +134,7 @@ async def test_Hybrid_n0는_arbitrary_text만_scrub하고_contract_values를_보
     patch, body = await _run_n0(ReviewRequestContext(intake=intake))
 
     masked = body["masked_intake"]
+    assert body["semantic_projection_version"] == "semantic_projection/v1"
     assert masked["target"] == {
         "selected_code": "005930",
         "name": "삼성전자",
@@ -169,12 +171,32 @@ async def test_structured_only_HybridIntake는_n0_저장까지_성공한다():
     patch, body = await _run_n0(ReviewRequestContext(intake=intake))
 
     assert patch["input_id"]
+    assert body["semantic_projection_version"] == "semantic_projection/v1"
     assert body["masked_input"] == ""
     assert body["masked_security_input"] == ""
     assert [item["value"] for item in body["masked_intake"]["structured"]] == [
         "WAIT",
         "HOLDING",
     ]
+
+
+@pytest.mark.asyncio
+async def test_n0_same_run_same_request는_projection_version을_포함해_exact_replay한다():
+    runtime_deps = deps()
+    node = make_nodes(runtime_deps)["n0"]
+    state = initial_state()
+    context = Runtime(
+        context=ReviewRequestContext(raw_text="삼성전자 user@example.com")
+    )
+
+    first = await node(state, context)
+    second = await node(state, context)
+    body = await runtime_deps.review_store.get_input(first["input_id"])
+
+    assert first == second
+    assert body["semantic_projection_version"] == "semantic_projection/v1"
+    assert body["masked_input"] == "삼성전자 [EMAIL]"
+    assert "user@example.com" not in json.dumps(body, ensure_ascii=False)
 
 
 @pytest.mark.asyncio

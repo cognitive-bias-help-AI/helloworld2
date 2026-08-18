@@ -37,6 +37,7 @@ from app.contexts.views import (
     VerifyPacket,
 )
 from app.domain.intake import FreeTextInput, HybridIntake, IntakeMode, TargetSecurityInput
+from app.domain.semantic_source import SEMANTIC_PROJECTION_VERSION
 from app.domain.slots import get_slot_definition
 from app.domain.stock_scope import evaluate_stock_scope
 from app.gateway.assemble import assemble_evidence
@@ -148,6 +149,7 @@ def make_nodes(deps: RuntimeDeps):
         intake = _sanitize_intake(intake)
         body = {
             "schema_version": intake.schema_version,
+            "semantic_projection_version": SEMANTIC_PROJECTION_VERSION,
             "masked_intake": intake.model_dump(mode="json", exclude={"schema_version"}),
             "masked_input": "\n".join(item.text for item in intake.free_text),
             "masked_security_input": _security_projection(intake),
