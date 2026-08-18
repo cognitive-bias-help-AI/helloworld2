@@ -2,6 +2,7 @@ import pytest
 from langgraph.types import Command
 
 from app.contexts.budget import NODE_BUDGETS, ctx_chars, ctx_items
+from app.domain.semantic import MAX_VERIFIABLE_CLAIMS
 from app.orchestration.checkpoint import MeasuringInMemorySaver
 from app.orchestration.drafts import GuardScanResult
 from app.orchestration.graph import build_graph
@@ -28,6 +29,7 @@ def test_I6_exact_six_rule_constants():
         25,
     )
     assert llm_call_limit(3) == 21
+    assert llm_call_limit(MAX_VERIFIABLE_CLAIMS) == 41
 
 
 @pytest.mark.asyncio

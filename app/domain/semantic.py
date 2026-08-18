@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from enum import StrEnum
-from typing import Literal
+from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.slots import get_slot_definition
 from app.schemas.frozen import SlotId
+
+MAX_VERIFIABLE_CLAIMS: Final = 8
 
 
 class SemanticKind(StrEnum):
@@ -67,10 +69,42 @@ class ClaimEligibility(_SemanticPolicyModel):
     ]
 
 
-class ClaimCardinality(_SemanticPolicyModel):
-    eligible_unit_count: int = Field(ge=0)
-    ambiguous: bool
-    materializable_index: int | None = Field(default=None, ge=0)
+class ClaimMaterializationCandidate(_SemanticPolicyModel):
+    """Eligible Semantic Unit metadata; it is not a canonical Claim."""
+
+    original_index: int = Field(ge=0)
+    slot_id: SlotId
+    global_span_start: int = Field(ge=0)
+    global_span_end: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def enforce_forward_span(self):
+        if self.global_span_end <= self.global_span_start:
+            raise ValueError("global_span_end must be greater than global_span_start")
+        return self
+
+
+class ClaimMaterializationPlan(_SemanticPolicyModel):
+    """Atomic global-capacity decision for one eligible candidate batch."""
+
+    materializable_indices: tuple[int, ...]
+    eligible_count: int = Field(ge=0)
+    existing_count: int = Field(ge=0)
+    capacity: Literal[8] = MAX_VERIFIABLE_CLAIMS
+    capacity_exceeded: bool
+
+    @model_validator(mode="after")
+    def enforce_atomic_capacity(self):
+        expected_exceeded = self.existing_count + self.eligible_count > self.capacity
+        if self.capacity_exceeded is not expected_exceeded:
+            raise ValueError("capacity_exceeded does not match the global Claim count")
+        if self.capacity_exceeded and self.materializable_indices:
+            raise ValueError("capacity-exceeded batch cannot select candidates")
+        if not self.capacity_exceeded and len(self.materializable_indices) != self.eligible_count:
+            raise ValueError("under-capacity batch must select every eligible candidate")
+        if len(self.materializable_indices) != len(set(self.materializable_indices)):
+            raise ValueError("materializable_indices must be unique")
+        return self
 
 
 def allowed_semantic_kinds(slot_id: int) -> tuple[SemanticKind, ...]:
@@ -98,26 +132,42 @@ def evaluate_claim_eligibility(
     return ClaimEligibility(eligible=False, reason="context_only")
 
 
-def evaluate_slot_claim_cardinality(
-    slot_id: int, semantic_kinds: Iterable[SemanticKind]
-) -> ClaimCardinality:
-    """Select zero or one eligible unit index; never choose among multiple units."""
+def plan_claim_materialization(
+    candidates: Iterable[ClaimMaterializationCandidate],
+    *,
+    existing_count: int,
+) -> ClaimMaterializationPlan:
+    """Select all eligible candidates or none when the global capacity is exceeded."""
 
-    eligible_indices: list[int] = []
-    for index, semantic_kind in enumerate(semantic_kinds):
-        result = evaluate_claim_eligibility(slot_id, semantic_kind)
-        if result.reason == "incompatible_slot_kind":
-            raise ValueError(
-                f"incompatible semantic kind for slot {slot_id}: {semantic_kind.value}"
-            )
-        if result.eligible:
-            eligible_indices.append(index)
+    if existing_count < 0:
+        raise ValueError("existing_count must be non-negative")
+    items = tuple(candidates)
+    original_indices = [item.original_index for item in items]
+    if len(original_indices) != len(set(original_indices)):
+        raise ValueError("duplicate original index")
+    spans = [(item.global_span_start, item.global_span_end) for item in items]
+    if len(spans) != len(set(spans)):
+        raise ValueError("duplicate global span")
 
-    count = len(eligible_indices)
-    return ClaimCardinality(
-        eligible_unit_count=count,
-        ambiguous=count > 1,
-        materializable_index=eligible_indices[0] if count == 1 else None,
+    ordered = sorted(
+        items,
+        key=lambda item: (
+            item.global_span_start,
+            item.global_span_end,
+            item.slot_id,
+            item.original_index,
+        ),
+    )
+    capacity_exceeded = existing_count + len(ordered) > MAX_VERIFIABLE_CLAIMS
+    return ClaimMaterializationPlan(
+        materializable_indices=(
+            ()
+            if capacity_exceeded
+            else tuple(item.original_index for item in ordered)
+        ),
+        eligible_count=len(ordered),
+        existing_count=existing_count,
+        capacity_exceeded=capacity_exceeded,
     )
 
 

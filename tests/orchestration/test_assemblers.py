@@ -161,6 +161,30 @@ def test_n9은_semantic_sort후_ID를_주입하고_missing_None을_허용한다(
     assert [(x.slot_id, x.finding_id) for x in result] == [(1, U(4)), (2, U(5))]
 
 
+def test_n9은_same_slot의_서로_다른_evaluation_Finding을_허용한다():
+    first = evaluation(eid=U(6), claim=U(8), evidence=U(1))
+    second = evaluation(eid=U(7), claim=U(9), evidence=U(2))
+    drafts = [
+        FindingDraft(
+            slot_id=4,
+            kind="unverified",
+            citations=[],
+            claim_evaluation_id=first.claim_evaluation_id,
+        ),
+        FindingDraft(
+            slot_id=4,
+            kind="unverified",
+            citations=[],
+            claim_evaluation_id=second.claim_evaluation_id,
+        ),
+    ]
+
+    result = assemble_findings(drafts, [first, second], [U(4), U(5)], NOW)
+
+    assert [item.slot_id for item in result] == [4, 4]
+    assert {item.claim_evaluation_id for item in result} == {U(6), U(7)}
+
+
 def test_n9은_unknown_eval_evidence와_mismatch_no_citation을_구분한다():
     ev = evaluation()
     unknown_eval = FindingDraft(slot_id=1, kind="unverified", citations=[], claim_evaluation_id=U(6))

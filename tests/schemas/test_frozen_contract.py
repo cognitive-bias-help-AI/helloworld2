@@ -65,6 +65,26 @@ def query(**kw: Any) -> m.Query:
     return m.Query(**(d | kw))
 
 
+def test_Claim은_같은_slot의_서로_다른_주장_복수를_허용한다() -> None:
+    demand = claim(
+        claim_id=C1,
+        slot_id=4,
+        user_text_span="HBM 수요가 증가한다",
+        span_offset=(0, 12),
+        normalized_proposition="HBM 수요가 증가한다",
+    )
+    supply = claim(
+        claim_id=C2,
+        slot_id=4,
+        user_text_span="HBM 공급이 부족하다",
+        span_offset=(13, 25),
+        normalized_proposition="HBM 공급이 부족하다",
+    )
+
+    assert demand.slot_id == supply.slot_id == 4
+    assert demand.claim_id != supply.claim_id
+
+
 def draft(**kw: Any) -> m.EvidenceDraft:
     d: dict[str, Any] = dict(
         source_type="dart", source_ref="20250814000123",

@@ -117,6 +117,20 @@ async def test_n5_filters_canonical_non_verifiable_claims_before_query_construct
 
 
 @pytest.mark.asyncio
+async def test_n5_same_slot_verifiable_claims는_각각_독립_Query를_만든다():
+    runtime_deps = deps()
+    demand = claim(1, verifiable=True, slot_id=4, proposition="HBM 수요 증가")
+    supply = claim(2, verifiable=True, slot_id=4, proposition="HBM 공급 부족")
+    state = await seed_claims(runtime_deps, [demand, supply])
+
+    patch = await make_nodes(runtime_deps)["n5"](state)
+    queries = await runtime_deps.evidence_store.get_queries(patch["query_ids"])
+
+    assert [item.claim_id for item in queries] == [demand.claim_id, supply.claim_id]
+    assert len({item.query_id for item in queries}) == 2
+
+
+@pytest.mark.asyncio
 async def test_n5_all_false_returns_empty_query_ids_without_provider_candidate():
     runtime_deps = deps()
     claims = [claim(1, verifiable=False), claim(2, verifiable=False)]
@@ -243,6 +257,42 @@ async def test_n8_mixed_claims_skip_non_verifiable_and_rule_fallback_no_evidence
     assert [node for node, _ in runtime_deps.model_gateway.calls].count("n8") == 1
     assert patch["counters"] == {"llm_calls": 1}
     assert patch["node_results"] == ["n8:partial"]
+
+
+@pytest.mark.asyncio
+async def test_n7_n8_same_slot_claims는_claim_id별_lineage를_분리한다():
+    runtime_deps = deps()
+    demand = claim(1, verifiable=True, slot_id=4, proposition="HBM 수요 증가")
+    supply = claim(2, verifiable=True, slot_id=4, proposition="HBM 공급 부족")
+    state = await seed_claims(runtime_deps, [demand, supply])
+    demand_query = query(1, demand.claim_id)
+    supply_query = query(2, supply.claim_id)
+    demand_evidence = evidence(1)
+    supply_evidence = evidence(2)
+    state["query_ids"] = await seed_queries_and_evidence(
+        runtime_deps,
+        [
+            (demand, demand_query, demand_evidence),
+            (supply, supply_query, supply_evidence),
+        ],
+    )
+
+    n7_patch = await make_nodes(runtime_deps)["n7"](state)
+    n8_patch = await make_nodes(runtime_deps)["n8"](state | n7_patch)
+    evaluations = await runtime_deps.review_store.get_claim_evaluations(
+        n8_patch["claim_evaluation_ids"]
+    )
+
+    demand_links = await runtime_deps.review_store.get_claim_evidence(
+        "run-s0", demand.claim_id
+    )
+    supply_links = await runtime_deps.review_store.get_claim_evidence(
+        "run-s0", supply.claim_id
+    )
+    assert [item.evidence_id for item in demand_links] == [demand_evidence.evidence_id]
+    assert [item.evidence_id for item in supply_links] == [supply_evidence.evidence_id]
+    assert [item.claim_id for item in evaluations] == [demand.claim_id, supply.claim_id]
+    assert len({item.claim_evaluation_id for item in evaluations}) == 2
 
 
 class AlwaysIncompleteEvaluation(FlowGateway):
