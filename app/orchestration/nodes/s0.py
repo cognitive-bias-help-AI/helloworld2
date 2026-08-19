@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from hashlib import sha256
 
 from langgraph.runtime import Runtime
@@ -40,6 +39,7 @@ from app.domain.intake import FreeTextInput, HybridIntake, IntakeMode, TargetSec
 from app.domain.semantic_source import SEMANTIC_PROJECTION_VERSION
 from app.domain.slots import get_slot_definition
 from app.domain.stock_scope import evaluate_stock_scope
+from app.domain.text_safety import sanitize_user_text
 from app.gateway.assemble import assemble_evidence
 from app.orchestration.drafts import (
     AskBackDraft,
@@ -70,27 +70,22 @@ from app.schemas.frozen import (
 )
 
 
-def _mask(value: str) -> str:
-    value = " ".join(value.split())
-    value = re.sub(r"[\w.+-]+@[\w.-]+", "[EMAIL]", value)
-    return re.sub(r"\b01[016789]-?\d{3,4}-?\d{4}\b", "[PHONE]", value)
-
-
 def _sanitize_intake(intake: HybridIntake) -> HybridIntake:
     target = (
-        intake.target.model_copy(update={"name": _mask(intake.target.name)})
+        intake.target.model_copy(update={"name": sanitize_user_text(intake.target.name)})
         if intake.target is not None and intake.target.name is not None
         else intake.target
     )
     structured = tuple(
-        item.model_copy(update={"value": _mask(item.value)})
+        item.model_copy(update={"value": sanitize_user_text(item.value)})
         if isinstance(item.value, str)
         and get_slot_definition(item.slot_id).value_shape == "text"
         else item
         for item in intake.structured
     )
     free_text = tuple(
-        item.model_copy(update={"text": _mask(item.text)}) for item in intake.free_text
+        item.model_copy(update={"text": sanitize_user_text(item.text)})
+        for item in intake.free_text
     )
     return intake.model_copy(
         update={"target": target, "structured": structured, "free_text": free_text}

@@ -9,6 +9,8 @@ from typing import Literal, get_type_hints
 import pytest
 from pydantic import BaseModel
 
+from app.domain.ask_history import AskRecord
+from app.domain.resume_source import ResumeSemanticSource
 from app.domain.slot_context import SlotValueObservation
 from app.gateway.protocols import ProviderAdapter, ReplayCache
 from app.models.protocols import ModelGateway
@@ -92,6 +94,10 @@ def test_ReviewStore는_판단_본문_7영역의_14개_async_메서드를_고정
         "get_report": ["self", "report_id"],
         "put_slot_observations": ["self", "run_id", "items"],
         "get_slot_observations": ["self", "run_id"],
+        "put_resume_sources": ["self", "run_id", "items"],
+        "get_resume_sources": ["self", "run_id"],
+        "put_ask_records": ["self", "run_id", "items"],
+        "get_ask_records": ["self", "run_id"],
     }
     assert {name for name in ReviewStore.__dict__ if not name.startswith("_")} == set(expected)
     for name, parameters in expected.items():
@@ -113,6 +119,14 @@ def test_ReviewStore는_판단_본문_7영역의_14개_async_메서드를_고정
     assert get_type_hints(ReviewStore.get_slot_observations)["return"] == list[
         SlotValueObservation
     ]
+    assert get_type_hints(ReviewStore.put_resume_sources)["items"] == list[
+        ResumeSemanticSource
+    ]
+    assert get_type_hints(ReviewStore.get_resume_sources)["return"] == list[
+        ResumeSemanticSource
+    ]
+    assert get_type_hints(ReviewStore.put_ask_records)["items"] == list[AskRecord]
+    assert get_type_hints(ReviewStore.get_ask_records)["return"] == list[AskRecord]
 
 
 def test_ProviderAdapter는_Evidence가_아닌_EvidenceDraft_경계를_고정한다():

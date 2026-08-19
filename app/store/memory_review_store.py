@@ -4,6 +4,8 @@ import json
 from copy import deepcopy
 from hashlib import sha256
 
+from app.domain.ask_history import AskRecord, expected_ask_id
+from app.domain.resume_source import ResumeSemanticSource, expected_resume_source_id
 from app.domain.slot_context import (
     SlotValueObservation,
     expected_observation_id,
@@ -44,6 +46,12 @@ class MemoryReviewStore:
         self._slot_observation_runs: dict[str, str] = {}
         self._slot_observation_hashes: dict[tuple[str, str], str] = {}
         self._slot_observation_order: dict[str, list[str]] = {}
+        self._resume_sources: dict[str, ResumeSemanticSource] = {}
+        self._resume_source_runs: dict[str, str] = {}
+        self._resume_source_order: dict[str, list[str]] = {}
+        self._ask_records: dict[str, AskRecord] = {}
+        self._ask_record_runs: dict[str, str] = {}
+        self._ask_record_order: dict[str, list[str]] = {}
 
     async def put_input(self, run_id: str, body: dict) -> str:
         item_id = _body_id("input", run_id)
@@ -171,4 +179,68 @@ class MemoryReviewStore:
         return [
             self._slot_observations[item_id]
             for item_id in self._slot_observation_order.get(run_id, [])
+        ]
+
+    async def put_resume_sources(
+        self, run_id: str, items: list[ResumeSemanticSource]
+    ) -> list[str]:
+        batch: dict[str, ResumeSemanticSource] = {}
+        for item in items:
+            if item.source_id != expected_resume_source_id(run_id, item.resume_key):
+                raise ValueError("resume source ownership/payload conflict")
+            old = self._resume_sources.get(item.source_id)
+            if old is not None and (
+                old != item or self._resume_source_runs[item.source_id] != run_id
+            ):
+                raise ValueError("resume source ownership/payload conflict")
+            previous = batch.get(item.source_id)
+            if previous is not None and previous != item:
+                raise ValueError("resume source ownership/payload conflict")
+            batch[item.source_id] = item
+
+        order = self._resume_source_order.setdefault(run_id, [])
+        for source_id, item in batch.items():
+            if source_id in self._resume_sources:
+                continue
+            self._resume_sources[source_id] = item
+            self._resume_source_runs[source_id] = run_id
+            order.append(source_id)
+        return [item.source_id for item in items]
+
+    async def get_resume_sources(self, run_id: str) -> list[ResumeSemanticSource]:
+        return [
+            self._resume_sources[item_id]
+            for item_id in self._resume_source_order.get(run_id, [])
+        ]
+
+    async def put_ask_records(
+        self, run_id: str, items: list[AskRecord]
+    ) -> list[str]:
+        batch: dict[str, AskRecord] = {}
+        for item in items:
+            if item.ask_id != expected_ask_id(run_id, item.ask_key):
+                raise ValueError("ask record ownership/payload conflict")
+            old = self._ask_records.get(item.ask_id)
+            if old is not None and (
+                old != item or self._ask_record_runs[item.ask_id] != run_id
+            ):
+                raise ValueError("ask record ownership/payload conflict")
+            previous = batch.get(item.ask_id)
+            if previous is not None and previous != item:
+                raise ValueError("ask record ownership/payload conflict")
+            batch[item.ask_id] = item
+
+        order = self._ask_record_order.setdefault(run_id, [])
+        for ask_id, item in batch.items():
+            if ask_id in self._ask_records:
+                continue
+            self._ask_records[ask_id] = item
+            self._ask_record_runs[ask_id] = run_id
+            order.append(ask_id)
+        return [item.ask_id for item in items]
+
+    async def get_ask_records(self, run_id: str) -> list[AskRecord]:
+        return [
+            self._ask_records[item_id]
+            for item_id in self._ask_record_order.get(run_id, [])
         ]

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from app.domain.ask_history import AskRecord
+from app.domain.resume_source import ResumeSemanticSource
 from app.domain.slot_context import SlotValueObservation
 from app.schemas.frozen import (
     Claim,
@@ -72,3 +74,15 @@ class ReviewStore(Protocol):
     async def get_slot_observations(
         self, run_id: str
     ) -> list[SlotValueObservation]: ...
+
+    async def put_resume_sources(
+        self, run_id: str, items: list[ResumeSemanticSource]
+    ) -> list[str]: ...
+
+    async def get_resume_sources(self, run_id: str) -> list[ResumeSemanticSource]: ...
+
+    async def put_ask_records(
+        self, run_id: str, items: list[AskRecord]
+    ) -> list[str]: ...
+
+    async def get_ask_records(self, run_id: str) -> list[AskRecord]: ...
