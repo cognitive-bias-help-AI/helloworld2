@@ -178,3 +178,71 @@ def test_slot_observation_batch_conflict는_partial_write를_남기지_않는다
         run(store.put_slot_observations("r", [new_item, conflict]))
 
     assert run(store.get_slot_observations("r")) == [existing]
+
+
+def test_semantic_batch은_observation과_claim을_함께_저장하고_exact_replay한다():
+    store = MemoryReviewStore()
+    item = observation()
+    semantic_claim = claim(2)
+
+    first = run(store.put_semantic_batch("r", [item], [semantic_claim]))
+    replay = run(store.put_semantic_batch("r", [item], [semantic_claim]))
+
+    assert first == replay == ([item.observation_id], [semantic_claim.claim_id])
+    assert run(store.get_slot_observations("r")) == [item]
+    assert run(store.get_claims([semantic_claim.claim_id])) == [semantic_claim]
+
+
+def test_semantic_batch은_context_only_observation만_저장할_수_있다():
+    store = MemoryReviewStore()
+    item = observation()
+
+    assert run(store.put_semantic_batch("r", [item], [])) == ([item.observation_id], [])
+    assert run(store.get_slot_observations("r")) == [item]
+
+
+def test_semantic_batch_observation_conflict는_claim_partial_write를_남기지_않는다():
+    store = MemoryReviewStore()
+    existing = observation()
+    conflicting = existing.model_copy(update={"value": "SHORT"})
+    semantic_claim = claim(2)
+    run(store.put_slot_observations("r", [existing]))
+
+    with pytest.raises(ValueError, match="observation_id ownership/payload conflict"):
+        run(store.put_semantic_batch("r", [conflicting], [semantic_claim]))
+
+    assert run(store.get_slot_observations("r")) == [existing]
+    with pytest.raises(KeyError):
+        run(store.get_claims([semantic_claim.claim_id]))
+
+
+def test_semantic_batch_claim_conflict는_observation_partial_write를_남기지_않는다():
+    store = MemoryReviewStore()
+    existing = claim()
+    conflicting = existing.model_copy(update={"normalized_proposition": "changed"})
+    item = observation()
+    run(store.put_claims("r", [existing]))
+
+    with pytest.raises(ValueError, match="claim_id ownership/payload conflict"):
+        run(store.put_semantic_batch("r", [item], [conflicting]))
+
+    assert run(store.get_slot_observations("r")) == []
+    assert run(store.get_claims([existing.claim_id])) == [existing]
+
+
+def test_semantic_batch은_cross_run과_internal_conflict에서_all_or_none이다():
+    store = MemoryReviewStore()
+    item = observation()
+    semantic_claim = claim(2)
+    run(store.put_claims("other", [semantic_claim]))
+
+    with pytest.raises(ValueError, match="claim_id ownership/payload conflict"):
+        run(store.put_semantic_batch("r", [item], [semantic_claim]))
+    assert run(store.get_slot_observations("r")) == []
+    assert run(store.get_claims([semantic_claim.claim_id])) == [semantic_claim]
+
+    first = observation(value="SHORT")
+    conflicting = first.model_copy(update={"value": "MEDIUM"})
+    with pytest.raises(ValueError, match="observation_id ownership/payload conflict"):
+        run(store.put_semantic_batch("r", [first, conflicting], [semantic_claim]))
+    assert run(store.get_slot_observations("r")) == []

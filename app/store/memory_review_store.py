@@ -181,6 +181,74 @@ class MemoryReviewStore:
             for item_id in self._slot_observation_order.get(run_id, [])
         ]
 
+    async def put_semantic_batch(
+        self,
+        run_id: str,
+        observations: list[SlotValueObservation],
+        claims: list[Claim],
+    ) -> tuple[list[str], list[str]]:
+        """Persist one semantic assembly result only after both sides validate."""
+
+        observations_by_id: dict[str, SlotValueObservation] = {}
+        observation_digests: dict[str, str] = {}
+        observation_hashes: dict[str, str] = {}
+        for item in observations:
+            old = self._slot_observations.get(item.observation_id)
+            if old is not None and (
+                old != item
+                or self._slot_observation_runs[item.observation_id] != run_id
+            ):
+                raise ValueError("observation_id ownership/payload conflict")
+            previous = observations_by_id.get(item.observation_id)
+            if previous is not None and previous != item:
+                raise ValueError("observation_id ownership/payload conflict")
+
+            digest = observation_content_sha256(item)
+            if item.observation_id != expected_observation_id(run_id, item):
+                raise ValueError("slot observation content hash/ID conflict")
+            indexed = self._slot_observation_hashes.get((run_id, digest))
+            if indexed is not None and indexed != item.observation_id:
+                raise ValueError("slot observation content hash/ID conflict")
+            batch_indexed = observation_hashes.get(digest)
+            if batch_indexed is not None and batch_indexed != item.observation_id:
+                raise ValueError("slot observation content hash/ID conflict")
+            observations_by_id[item.observation_id] = item
+            observation_digests[item.observation_id] = digest
+            observation_hashes[digest] = item.observation_id
+
+        claims_by_id: dict[str, Claim] = {}
+        for item in claims:
+            old = self._claims.get(item.claim_id)
+            if old is not None and (
+                old != item or self._claim_runs[item.claim_id] != run_id
+            ):
+                raise ValueError("claim_id ownership/payload conflict")
+            previous = claims_by_id.get(item.claim_id)
+            if previous is not None and previous != item:
+                raise ValueError("claim_id ownership/payload conflict")
+            claims_by_id[item.claim_id] = item
+
+        observation_order = self._slot_observation_order.setdefault(run_id, [])
+        for observation_id, item in observations_by_id.items():
+            if observation_id in self._slot_observations:
+                continue
+            self._slot_observations[observation_id] = item
+            self._slot_observation_runs[observation_id] = run_id
+            self._slot_observation_hashes[(run_id, observation_digests[observation_id])] = (
+                observation_id
+            )
+            observation_order.append(observation_id)
+        for claim_id, item in claims_by_id.items():
+            if claim_id in self._claims:
+                continue
+            self._claims[claim_id] = item
+            self._claim_runs[claim_id] = run_id
+
+        return (
+            [item.observation_id for item in observations],
+            [item.claim_id for item in claims],
+        )
+
     async def put_resume_sources(
         self, run_id: str, items: list[ResumeSemanticSource]
     ) -> list[str]:

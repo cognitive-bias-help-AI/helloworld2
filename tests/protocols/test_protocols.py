@@ -94,6 +94,7 @@ def test_ReviewStore는_판단_본문_7영역의_14개_async_메서드를_고정
         "get_report": ["self", "report_id"],
         "put_slot_observations": ["self", "run_id", "items"],
         "get_slot_observations": ["self", "run_id"],
+        "put_semantic_batch": ["self", "run_id", "observations", "claims"],
         "put_resume_sources": ["self", "run_id", "items"],
         "get_resume_sources": ["self", "run_id"],
         "put_ask_records": ["self", "run_id", "items"],
@@ -119,6 +120,12 @@ def test_ReviewStore는_판단_본문_7영역의_14개_async_메서드를_고정
     assert get_type_hints(ReviewStore.get_slot_observations)["return"] == list[
         SlotValueObservation
     ]
+    assert get_type_hints(ReviewStore.put_semantic_batch) == {
+        "run_id": str,
+        "observations": list[SlotValueObservation],
+        "claims": list[Claim],
+        "return": tuple[list[str], list[str]],
+    }
     assert get_type_hints(ReviewStore.put_resume_sources)["items"] == list[
         ResumeSemanticSource
     ]

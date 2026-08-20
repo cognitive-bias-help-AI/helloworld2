@@ -75,6 +75,13 @@ class ReviewStore(Protocol):
         self, run_id: str
     ) -> list[SlotValueObservation]: ...
 
+    async def put_semantic_batch(
+        self,
+        run_id: str,
+        observations: list[SlotValueObservation],
+        claims: list[Claim],
+    ) -> tuple[list[str], list[str]]: ...
+
     async def put_resume_sources(
         self, run_id: str, items: list[ResumeSemanticSource]
     ) -> list[str]: ...
