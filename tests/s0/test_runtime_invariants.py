@@ -1,9 +1,7 @@
 import pytest
-from langgraph.types import Command
 
 from app.contexts.budget import NODE_BUDGETS, ctx_chars, ctx_items
 from app.domain.semantic import MAX_VERIFIABLE_CLAIMS
-from app.orchestration.checkpoint import MeasuringInMemorySaver
 from app.orchestration.drafts import GuardScanResult
 from app.orchestration.graph import build_graph
 from app.orchestration.limits import (
@@ -17,8 +15,7 @@ from app.orchestration.limits import (
 from app.orchestration.runtime import ReviewRequestContext
 from app.orchestration.validators.citations import CitationContractViolation, validate_citations
 from app.schemas.frozen import CitationRef
-from tests.s0.runtime_fixtures import RAW, FlowGateway, deps, initial_state
-from tests.s0.test_vertical_slice import MissingThenFlow, config
+from tests.s0.runtime_fixtures import RAW, FlowGateway, complete_intake, deps, initial_state
 
 
 def test_I6_exact_six_rule_constants():
@@ -33,18 +30,13 @@ def test_I6_exact_six_rule_constants():
 
 
 @pytest.mark.asyncio
-async def test_I3_8개_runtime_model_call이_existing_budget를_준수한다():
+async def test_I3_7개_runtime_model_call이_existing_budget를_준수한다():
     gateway = FlowGateway()
     await build_graph(deps(gateway=gateway)).ainvoke(
-        initial_state(), context=ReviewRequestContext(raw_text=RAW)
+        initial_state(), context=ReviewRequestContext(intake=complete_intake())
     )
-    ask_gateway = MissingThenFlow()
-    ask = build_graph(deps(gateway=ask_gateway), checkpointer=MeasuringInMemorySaver())
-    cfg = config("i3-slot")
-    await ask.ainvoke(initial_state(), cfg, context=ReviewRequestContext(raw_text=RAW))
-    await ask.ainvoke(Command(resume={"answer": "영업이익 증가"}), cfg)
-    observations = [*gateway.calls, *ask_gateway.calls]
-    assert {node for node, _ in observations} == set(NODE_BUDGETS)
+    observations = gateway.calls
+    assert {node for node, _ in observations} == set(NODE_BUDGETS) - {"n4"}
     for node, view in observations:
         budget = NODE_BUDGETS[node]
         assert ctx_chars(view) <= budget.chars

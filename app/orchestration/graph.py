@@ -6,7 +6,7 @@ from app.orchestration.nodes.s0 import make_nodes
 from app.orchestration.runtime import ReviewRequestContext, RuntimeDeps
 from app.orchestration.state import ReviewState
 
-VERTICES = ("n0", "n1", "n2", "n3", "n3b", "n4", "n5", "n6", "n7", "n8", "n9", "n10", "n11", "n12")
+VERTICES = ("n0", "n1", "n2", "intake_review", "n5", "n6", "n7", "n8", "n9", "n10", "n11", "n12")
 
 
 def _blocked(state: ReviewState) -> bool:
@@ -20,10 +20,7 @@ def build_graph(deps: RuntimeDeps, *, checkpointer=None):
     graph.add_edge(START, "n0")
     graph.add_edge("n0", "n1")
     graph.add_conditional_edges("n1", lambda s: "n12" if _blocked(s) else "n2")
-    graph.add_conditional_edges("n2", lambda s: "n12" if _blocked(s) else "n3")
-    graph.add_conditional_edges("n3", lambda s: "n5" if s["claim_ids"] else "n4")
-    graph.add_edge("n4", "n3b")
-    graph.add_conditional_edges("n3b", lambda s: "n12" if _blocked(s) else "n5")
+    graph.add_conditional_edges("n2", lambda s: "n12" if _blocked(s) else "intake_review")
     graph.add_conditional_edges("n5", lambda s: "n12" if _blocked(s) else "n6")
     for left, right in (("n6", "n7"), ("n7", "n8"), ("n8", "n9")):
         graph.add_edge(left, right)

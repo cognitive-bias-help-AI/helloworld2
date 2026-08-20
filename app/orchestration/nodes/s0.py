@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from hashlib import sha256
 
 from langgraph.runtime import Runtime
-from langgraph.types import interrupt
+from langgraph.types import Command, interrupt
 from pydantic import ValidationError
 
 from app.assemblers.claim_evaluation import assemble_claim_evaluation
@@ -19,7 +20,6 @@ from app.assemblers.fallbacks import (
 from app.assemblers.findings import assemble_findings
 from app.contexts.budget import NODE_BUDGETS, ctx_chars, ctx_items
 from app.contexts.views import (
-    AskBackContext,
     ClaimView,
     ClassifiedEvidenceView,
     EvidenceExcerptView,
@@ -27,36 +27,42 @@ from app.contexts.views import (
     GuardBatchEnvelope,
     GuardScanView,
     IntegrationView,
-    MissingSlotView,
     RenderCitationView,
     RenderView,
-    SlotContext,
-    SlotDefinitionView,
     SlotTextView,
     VerifyPacket,
 )
-from app.domain.intake import FreeTextInput, HybridIntake, IntakeMode, TargetSecurityInput
+from app.domain.intake import (
+    FreeTextInput,
+    HybridIntake,
+    IntakeMode,
+    ResponseState,
+    TargetSecurityInput,
+)
+from app.domain.routing import RoutingOutcome
 from app.domain.semantic_source import SEMANTIC_PROJECTION_VERSION
 from app.domain.slots import get_slot_definition
 from app.domain.stock_scope import evaluate_stock_scope
 from app.domain.text_safety import sanitize_user_text
 from app.gateway.assemble import assemble_evidence
 from app.orchestration.drafts import (
-    AskBackDraft,
     FindingDraft,
     GuardScanResult,
     GuardVerdictDraft,
     RenderDraft,
-    SlotExtractionDraft,
 )
 from app.orchestration.hitl import StockChoiceRequest, StockChoiceResume, select_stock
+from app.orchestration.intake_review_runtime import (
+    HitlResumeEvent,
+    InitialIntakeEvent,
+    process_intake_review,
+)
 from app.orchestration.limits import REWRITE_LIMIT
 from app.orchestration.reporting import build_report_artifact
 from app.orchestration.runtime import ReviewRequestContext, RuntimeDeps
 from app.orchestration.state import ReviewState
 from app.orchestration.validators.citations import validate_citations
 from app.schemas.frozen import (
-    Claim,
     ClaimEvaluationDraft,
     ClaimStanceDraft,
     GuardInput,
@@ -227,67 +233,103 @@ def make_nodes(deps: RuntimeDeps):
         selected = select_stock(candidates, resume)
         return {"stock": selected.model_dump(), "node_results": ["n2:ok"]}
 
-    async def n3(state: ReviewState):
-        body = await deps.review_store.get_input(state["input_id"])
-        view = SlotContext(
-            masked_input=body["masked_input"],
-            slot_definitions=[
-                SlotDefinitionView(slot_id=1, name="투자 주장", description="검증할 주장")
-            ],
+    async def intake_review(state: ReviewState):
+        claim_ids = list(state["claim_ids"])
+        event = InitialIntakeEvent(
+            run_id=state["run_id"],
+            event_key=f"intake:{state['input_id']}",
+            input_id=state["input_id"],
+            run_started_at=datetime.fromisoformat(state["started_at"]),
+            existing_claim_ids=tuple(claim_ids),
         )
-        draft, _ = await _invoke(deps, "n3", "SMALL", view, SlotExtractionDraft)
-        now = deps.clock()
-        claims = [
-            Claim(
-                claim_id=deps.id_factory(),
-                **item.model_dump(),
-                origin=SourceTrace.LLM_EXTRACTION,
-                created_at=now,
+        while True:
+            result = await process_intake_review(
+                event,
+                review_store=deps.review_store,
+                model_gateway=deps.model_gateway,
             )
-            for item in draft.claims
-        ]
-        ids = await deps.review_store.put_claims(state["run_id"], claims)
-        slots = [{"slot_id": item.slot_id, "status": "filled"} for item in draft.claims]
-        return {
-            "claim_ids": ids,
-            "slots": slots,
-            "node_results": ["n3:ok"],
-            "counters": {"llm_calls": 1},
-        }
+            for claim_id in result.persisted_claim_ids:
+                if claim_id not in claim_ids:
+                    claim_ids.append(claim_id)
 
-    async def n4(state: ReviewState):
-        view = AskBackContext(
-            missing_slots=[MissingSlotView(slot_id=1, status="absent", summary="투자 주장 없음")]
-        )
-        draft, _ = await _invoke(deps, "n4", "SMALL", view, AskBackDraft)
-        answer = interrupt({"questions": [item.model_dump() for item in draft.questions]})
-        return {
-            "user_action": answer,
-            "node_results": ["n4:resume"],
-            "counters": {"llm_calls": 1, "hitl_reask": 1},
-        }
+            if result.routing_outcome is not RoutingOutcome.NEEDS_HITL:
+                destination = {
+                    RoutingOutcome.READY_FOR_EVIDENCE: "n5",
+                    RoutingOutcome.CONTEXT_ONLY: "n11",
+                    RoutingOutcome.BLOCKED: "n12",
+                }[result.routing_outcome]
+                ask_records = await deps.review_store.get_ask_records(state["run_id"])
+                ask_turns = len(
+                    {item.ask_key.rsplit(":ask:", 1)[0] for item in ask_records}
+                )
+                counters = {"hitl_reask": ask_turns} if ask_turns else {}
+                return Command(
+                    update={
+                        "claim_ids": claim_ids,
+                        "node_results": [
+                            f"intake_review:{result.routing_outcome.value.lower()}"
+                        ],
+                        "counters": counters,
+                    },
+                    goto=destination,
+                )
 
-    async def n3b(state: ReviewState):
-        answer = state.get("user_action") or {}
-        text = str(answer.get("answer", "")).strip()
-        if not text:
-            return {"node_results": [f"n3b:block:{ReasonCode.INPUT_INSUFFICIENT.value}"]}
-        claim = Claim(
-            claim_id=deps.id_factory(),
-            slot_id=1,
-            user_text_span=text,
-            span_offset=(0, len(text)),
-            normalized_proposition=text,
-            verifiable=True,
-            origin=SourceTrace.USER_CONFIRMED,
-            created_at=deps.clock(),
-        )
-        ids = await deps.review_store.put_claims(state["run_id"], [claim])
-        return {
-            "claim_ids": ids,
-            "slots": [{"slot_id": 1, "status": "filled"}],
-            "node_results": ["n3b:ok"],
-        }
+            records = await deps.review_store.get_ask_records(state["run_id"])
+            prefix = f"{event.event_key}:ask:"
+            by_slot = {
+                item.slot_id: item for item in records if item.ask_key.startswith(prefix)
+            }
+            questions = []
+            assert result.question_payload is not None
+            for question in result.question_payload.questions:
+                record = by_slot.get(question.slot_id)
+                if record is None:
+                    raise ValueError("question has no persisted AskRecord")
+                questions.append(
+                    {
+                        "ask_id": record.ask_id,
+                        "slot_id": question.slot_id,
+                        "question": question.question,
+                    }
+                )
+            payload = interrupt(
+                {"schema_version": "intake_review_hitl/v1", "questions": questions}
+            )
+            if not isinstance(payload, dict):
+                raise ValueError("HITL resume payload must be an object")
+            answers = payload.get("answers")
+            if answers is None and len(questions) == 1 and "answer" in payload:
+                answers = [payload]
+            if not isinstance(answers, list) or len(answers) != len(questions):
+                raise ValueError("HITL resume must answer every emitted question")
+            expected_ids = [item["ask_id"] for item in questions]
+            actual_ids = [item.get("ask_id") for item in answers if isinstance(item, dict)]
+            if actual_ids != expected_ids:
+                raise ValueError("HITL answers must match emitted AskRecords in order")
+
+            for index, answer in enumerate(answers):
+                raw_answer = str(answer.get("answer", "")).strip()
+                if not raw_answer:
+                    raise ValueError("HITL answer must be non-blank")
+                event = HitlResumeEvent(
+                    run_id=state["run_id"],
+                    event_key=f"resume:{answer['ask_id']}",
+                    input_id=state["input_id"],
+                    ask_id=answer["ask_id"],
+                    raw_answer=raw_answer,
+                    response_state=ResponseState(answer.get("response_state", "answered")),
+                    run_started_at=datetime.fromisoformat(state["started_at"]),
+                    existing_claim_ids=tuple(claim_ids),
+                )
+                result = await process_intake_review(
+                    event,
+                    review_store=deps.review_store,
+                    model_gateway=deps.model_gateway,
+                    persist_questions=index == len(answers) - 1,
+                )
+                for claim_id in result.persisted_claim_ids:
+                    if claim_id not in claim_ids:
+                        claim_ids.append(claim_id)
 
     async def n5(state: ReviewState):
         try:
@@ -679,5 +721,5 @@ def make_nodes(deps: RuntimeDeps):
         name: value
         for name, value in locals().items()
         if name
-        in {"n0", "n1", "n2", "n3", "n3b", "n4", "n5", "n6", "n7", "n8", "n9", "n10", "n11", "n12"}
+        in {"n0", "n1", "n2", "intake_review", "n5", "n6", "n7", "n8", "n9", "n10", "n11", "n12"}
     }

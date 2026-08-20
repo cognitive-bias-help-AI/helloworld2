@@ -108,9 +108,9 @@ def check_i2() -> CheckResult:
 
 def check_i3() -> CheckResult:
     return _pytest_result(
-        "tests/s0/test_runtime_invariants.py::test_I3_8개_runtime_model_call이_existing_budget를_준수한다",
+        "tests/s0/test_runtime_invariants.py::test_I3_7개_runtime_model_call이_existing_budget를_준수한다",
         CheckStatus.PASS,
-        "all eight runtime LLM vertices observed under existing NODE_BUDGETS",
+        "all seven production LLM phases observed under NODE_BUDGETS",
     )
 
 

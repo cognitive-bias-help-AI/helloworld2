@@ -4,6 +4,14 @@ from datetime import UTC, datetime
 
 from app.contexts.budget import ctx_chars
 from app.contexts.views import EvidencePacket, IntegrationView, RenderView, VerifyPacket
+from app.domain.intake import (
+    FreeTextInput,
+    HybridIntake,
+    IntakeMode,
+    ResponseState,
+    StructuredAnswer,
+)
+from app.domain.semantic import SemanticKind
 from app.gateway.adapters.mock import MockAdapter
 from app.orchestration.drafts import (
     AskBackDraft,
@@ -14,6 +22,8 @@ from app.orchestration.drafts import (
     GuardVerdictDraft,
     RenderDraft,
     RenderedSlotDraft,
+    SemanticExtractionDraft,
+    SemanticUnitDraft,
     SlotExtractionDraft,
 )
 from app.orchestration.reporting import RenderCandidateStore
@@ -23,6 +33,7 @@ from app.schemas.frozen import (
     ClaimEvaluationDraft,
     ClaimEvidenceDraft,
     ClaimStanceDraft,
+    SourceTrace,
     StockCandidate,
     Usage,
 )
@@ -64,6 +75,28 @@ class FlowGateway:
                     )
                 ]
             )
+        elif output_schema is SemanticExtractionDraft:
+            segment = next(
+                (item for item in input_view.segments if item.locked_slot_id is None),
+                input_view.segments[0],
+            )
+            locked = segment.locked_slot_id
+            proposed_value, semantic_kind = {
+                1: ("CONSIDER_ENTRY", SemanticKind.USER_PREFERENCE),
+                2: ("NOT_HOLDING", SemanticKind.USER_STATE),
+                3: ("LONG", SemanticKind.USER_PREFERENCE),
+                5: (None, SemanticKind.USER_PREFERENCE),
+                8: (None, SemanticKind.DECISION_RULE),
+            }.get(locked, (None, SemanticKind.EXTERNAL_ASSERTION))
+            value = SemanticExtractionDraft(units=[SemanticUnitDraft(
+                segment_id=segment.segment_id,
+                slot_id=locked or 4,
+                text_span=segment.text,
+                span_offset=(0, len(segment.text)),
+                normalized_proposition=("영업이익 증가" if locked is None else None),
+                proposed_value=proposed_value,
+                semantic_kind=semantic_kind,
+            )])
         elif output_schema is AskBackDraft:
             value = AskBackDraft(
                 questions=[AskBackQuestionDraft(slot_id=1, question="검증할 주장은 무엇인가요?")]
@@ -100,12 +133,16 @@ class FlowGateway:
             )
         elif output_schema is RenderDraft:
             assert isinstance(input_view, RenderView)
-            citation = CitationRef(
-                evidence_id=input_view.citations[0].evidence_id,
-                span=input_view.citations[0].span,
+            citations = (
+                [CitationRef(
+                    evidence_id=input_view.citations[0].evidence_id,
+                    span=input_view.citations[0].span,
+                )]
+                if input_view.citations
+                else []
             )
             value = RenderDraft(
-                slots=[RenderedSlotDraft(slot_no=1, text="검증된 결과", citations=[citation])]
+                slots=[RenderedSlotDraft(slot_no=1, text="검증된 결과", citations=citations)]
             )
         elif output_schema is GuardVerdictDraft:
             value = GuardVerdictDraft(violations=[])
@@ -141,6 +178,29 @@ def initial_state():
         "counters": {},
         "started_at": NOW.isoformat(),
     }
+
+
+def complete_intake() -> HybridIntake:
+    return HybridIntake(
+        schema_version="hybrid_intake/v1",
+        mode=IntakeMode.HYBRID,
+        structured=tuple(
+            StructuredAnswer(
+                slot_id=slot_id,
+                value=value,
+                source=SourceTrace.SURVEY,
+                response_state=ResponseState.ANSWERED,
+            )
+            for slot_id, value in (
+                (1, "CONSIDER_ENTRY"),
+                (2, "NOT_HOLDING"),
+                (3, "LONG"),
+                (5, "기업가치 상승"),
+                (8, "전제가 바뀌면 재검토"),
+            )
+        ),
+        free_text=(FreeTextInput(text=RAW, source=SourceTrace.CHAT_EXPLICIT),),
+    )
 
 
 def deps(gateway=None, resolver=None):

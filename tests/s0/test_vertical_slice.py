@@ -2,12 +2,11 @@ import pytest
 from langgraph.types import Command
 
 from app.orchestration.checkpoint import MeasuringInMemorySaver
-from app.orchestration.drafts import SlotExtractionDraft
 from app.orchestration.graph import build_graph
 from app.orchestration.runtime import ReviewRequestContext
 from app.schemas.frozen import ClaimStanceDraft, StockCandidate
 from tests.s0.fakes import FixtureStockResolver
-from tests.s0.runtime_fixtures import RAW, FlowGateway, deps, initial_state
+from tests.s0.runtime_fixtures import RAW, FlowGateway, complete_intake, deps, initial_state
 
 
 def config(name):
@@ -36,34 +35,23 @@ async def test_stock_HITL_interrupt_checkpoint_resume_membership():
 
     result = await graph.ainvoke(Command(resume={"selected_code": "005930"}), cfg)
     assert result["stock"]["code"] == "005930"
-    assert result["node_results"][-1] == "n12:end"
-
-
-class MissingThenFlow(FlowGateway):
-    async def invoke(self, slot, prompt_version, input_view, output_schema):
-        if output_schema is SlotExtractionDraft:
-            self.calls.append(("n3", input_view))
-            from app.schemas.frozen import Usage
-
-            return SlotExtractionDraft(claims=[]), Usage(
-                model_slot=slot, prompt_tokens=0, output_tokens=0, ctx_chars=1
-            )
-        return await super().invoke(slot, prompt_version, input_view, output_schema)
+    assert result["__interrupt__"]
 
 
 @pytest.mark.asyncio
-async def test_slot_HITL_resume_n3b_USER_CONFIRMED():
-    runtime_deps = deps(gateway=MissingThenFlow())
+async def test_slot_HITL은_AskRecord기반_payload를_emit한다():
+    runtime_deps = deps()
     graph = build_graph(runtime_deps, checkpointer=MeasuringInMemorySaver())
     cfg = config("slot-hitl")
     paused = await graph.ainvoke(initial_state(), cfg, context=ReviewRequestContext(raw_text=RAW))
     assert paused["__interrupt__"]
 
-    result = await graph.ainvoke(Command(resume={"answer": "영업이익이 증가했다"}), cfg)
-    claims = await runtime_deps.review_store.get_claims(result["claim_ids"])
-    assert claims[-1].origin.value == "user_confirmed"
-    assert "n3b:ok" in result["node_results"]
-    assert result["report_id"]
+    payload = paused["__interrupt__"][0].value
+    records = await runtime_deps.review_store.get_ask_records("run-s0")
+    assert payload["schema_version"] == "intake_review_hitl/v1"
+    assert [item["ask_id"] for item in payload["questions"]] == [
+        item.ask_id for item in records
+    ]
 
 
 class TwiceInvalidStance(FlowGateway):
@@ -88,7 +76,7 @@ async def test_degraded_two_failures_then_rule_fallback_and_no_third_call():
     runtime_deps = deps(gateway=gateway)
     graph = build_graph(runtime_deps, checkpointer=MeasuringInMemorySaver())
     result = await graph.ainvoke(
-        initial_state(), config("degraded"), context=ReviewRequestContext(raw_text=RAW)
+        initial_state(), config("degraded"), context=ReviewRequestContext(intake=complete_intake())
     )
     report = await runtime_deps.review_store.get_report(result["report_id"])
     links = await runtime_deps.review_store.get_claim_evidence(

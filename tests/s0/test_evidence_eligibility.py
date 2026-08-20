@@ -393,12 +393,17 @@ async def test_n9_zero_evidence_backed_is_deterministic_terminal(case):
 
 
 def fake_graph_nodes(block_at: str):
+    from langgraph.types import Command
+
     nodes = {}
 
     for name in graph_module.VERTICES:
         async def node(state, runtime=None, *, current=name):
-            if current == "n3":
-                return {"claim_ids": [uid(9001)], "node_results": ["n3:ok"]}
+            if current == "intake_review":
+                return Command(
+                    update={"claim_ids": [uid(9001)], "node_results": ["intake_review:ok"]},
+                    goto="n5",
+                )
             if current == block_at:
                 reason = "contract_violation" if current == "n5" else "evidence_insufficient"
                 return {"node_results": [f"{current}:block:{reason}"]}
