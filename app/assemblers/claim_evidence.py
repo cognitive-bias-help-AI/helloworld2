@@ -8,7 +8,7 @@ def assemble_claim_evidence(
     draft: ClaimStanceDraft,
     claim_id: str,
     packet_evidence_ids: list[str],
-    query_id_by_evidence: dict[str, str],
+    query_id_by_evidence: dict[str, str | None],
 ) -> list[ClaimEvidence]:
     if len(packet_evidence_ids) != len(set(packet_evidence_ids)):
         raise AssemblyError("duplicate_reference", retryable=False)

@@ -22,6 +22,7 @@ from app.schemas.frozen import (
     EvidenceDraft,
     EvidenceQueryLink,
     Finding,
+    ProviderCall,
     Query,
     RateLimitHint,
     ReasonCode,
@@ -43,14 +44,18 @@ def test_Protocol_5종은_구현체가_아니라_runtime_checkable_인터페이�
             protocol()
 
 
-def test_EvidenceStore는_DDR의_8개_async_메서드와_domain_type을_고정한다():
+def test_EvidenceStore는_acquisition의_12개_async_메서드와_domain_type을_고정한다():
     expected_parameters = {
         "put_queries": ["self", "run_id", "queries"],
         "get_queries": ["self", "query_ids"],
+        "put_provider_calls": ["self", "run_id", "calls"],
+        "get_provider_calls": ["self", "provider_request_ids"],
+        "provider_calls_for_query": ["self", "query_id"],
         "put_many": ["self", "run_id", "evs"],
         "get_many": ["self", "ids"],
         "find_by_sha256": ["self", "run_id", "hashes"],
         "link": ["self", "pairs"],
+        "put_evidence_batch": ["self", "run_id", "evidence", "links"],
         "evidence_ids_for_claim": ["self", "claim_id"],
         "evidence_ids_for_queries": ["self", "query_ids"],
     }
@@ -68,6 +73,15 @@ def test_EvidenceStore는_DDR의_8개_async_메서드와_domain_type을_고정�
         "return": list[str],
     }
     assert get_type_hints(EvidenceStore.get_queries)["return"] == list[Query]
+    assert get_type_hints(EvidenceStore.put_provider_calls) == {
+        "run_id": str,
+        "calls": list[ProviderCall],
+        "return": list[str],
+    }
+    assert get_type_hints(EvidenceStore.get_provider_calls)["return"] == list[ProviderCall]
+    assert get_type_hints(EvidenceStore.provider_calls_for_query)["return"] == list[
+        ProviderCall
+    ]
     assert get_type_hints(EvidenceStore.put_many) == {
         "run_id": str,
         "evs": list[Evidence],
@@ -76,6 +90,12 @@ def test_EvidenceStore는_DDR의_8개_async_메서드와_domain_type을_고정�
     assert get_type_hints(EvidenceStore.get_many)["return"] == list[Evidence]
     assert get_type_hints(EvidenceStore.find_by_sha256)["return"] == dict[str, str]
     assert get_type_hints(EvidenceStore.link)["pairs"] == list[EvidenceQueryLink]
+    assert get_type_hints(EvidenceStore.put_evidence_batch) == {
+        "run_id": str,
+        "evidence": list[Evidence],
+        "links": list[EvidenceQueryLink],
+        "return": list[str],
+    }
 
 
 def test_ReviewStore는_판단_본문_7영역의_14개_async_메서드를_고정한다():

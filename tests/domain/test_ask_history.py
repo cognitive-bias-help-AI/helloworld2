@@ -76,7 +76,7 @@ def test_같은_slot의_서로_다른_issue를_record에서_구분한다():
     assert project_hitl_context([ambiguity, conflict]).already_asked_slot_ids == (4,)
 
 
-def test_v1_payload는_backward_compatible_read되고_builder는_v2를_생성한다():
+def test_v1_v2_payload는_backward_compatible_read되고_builder는_v3를_생성한다():
     v1 = AskRecord.model_validate(
         {
             "schema_version": "ask_record/v1",
@@ -88,10 +88,25 @@ def test_v1_payload는_backward_compatible_read되고_builder는_v2를_생성한
             "sequence": 0,
         }
     )
-    v2 = build_ask_record("run-1", ask_key="ask-v2", target=target(4), sequence=1)
+    v2 = AskRecord.model_validate(
+        {
+            **v1.model_dump(),
+            "schema_version": "ask_record/v2",
+            "ask_key": "legacy-v2",
+        }
+    )
+    v3 = build_ask_record(
+        "run-1",
+        ask_key="ask-v3",
+        target=target(4),
+        sequence=1,
+        claim_ids=("01ARZ3NDEKTSV4RRFFQ69G5FAW",),
+    )
 
     assert v1.schema_version == "ask_record/v1"
     assert v2.schema_version == "ask_record/v2"
+    assert v3.schema_version == "ask_record/v3"
+    assert v3.claim_ids == ("01ARZ3NDEKTSV4RRFFQ69G5FAW",)
 
 
 def test_v2_ambiguity는_minimal_lineage로_issue를_exact_reconstruct한다():

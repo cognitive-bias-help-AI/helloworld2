@@ -7,6 +7,8 @@ import ast
 import os
 import subprocess
 import sys
+import tempfile
+import xml.etree.ElementTree as ET
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -19,7 +21,7 @@ from app.store.protocols import EvidenceStore, ReviewStore
 ROOT = Path(__file__).resolve().parents[1]
 PHASE_ORDER = {"p0": 0, "s0": 1, "t2": 2}
 CANONICAL_OUTPUT_SCHEMAS = {"Evidence", "ClaimEvidence", "ClaimEvaluation", "Finding"}
-I8_ROOTS = (ROOT / "app" / "prompts", ROOT / "app" / "orchestration" / "nodes")
+I8_ROOTS = (ROOT / "app" / "prompts", ROOT / "app" / "orchestration")
 I10_MAPPING = {
     "input_id": ("review", "get_input"),
     "claim_ids": ("review", "get_claims"),
@@ -28,6 +30,16 @@ I10_MAPPING = {
     "finding_ids": ("review", "get_findings"),
     "report_id": ("review", "get_report"),
 }
+I5_MEMORY_NODE = (
+    "tests/store/test_memory_evidence_store.py::"
+    "test_query와_evidence의_idempotency_conflict_run_scope를_검증한다"
+)
+I5_POSTGRES_NODES = (
+    "tests/store/test_sql_evidence_store_postgres.py::"
+    "test_physical_pk_fk_unique_and_composite_ownership",
+    "tests/store/test_sql_evidence_store_postgres.py::"
+    "test_concurrent_conflicting_evidence_hash_race",
+)
 
 
 class CheckStatus(Enum):
@@ -42,6 +54,16 @@ class CheckStatus(Enum):
 class CheckResult:
     status: CheckStatus
     message: str
+
+
+@dataclass(frozen=True)
+class PytestEvidence:
+    returncode: int
+    passed: int
+    failed: int
+    skipped: int
+    errors: int
+    detail: str
 
 
 Check = Callable[[], CheckResult]
@@ -90,6 +112,51 @@ def _pytest_result(node_id: str, success: CheckStatus, message: str) -> CheckRes
     )
 
 
+def _run_pytest_evidence(node_ids: tuple[str, ...]) -> PytestEvidence:
+    with tempfile.TemporaryDirectory(prefix="i5-pytest-") as temp_dir:
+        report = Path(temp_dir) / "report.xml"
+        process = _run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                *node_ids,
+                f"--junitxml={report}",
+            ]
+        )
+        output = (process.stdout or process.stderr).strip().splitlines()
+        detail = output[-1][:200] if output else "pytest produced no output"
+        if not report.is_file():
+            return PytestEvidence(process.returncode, 0, 0, 0, 0, detail)
+        root = ET.parse(report).getroot()
+        suites = [root] if root.tag == "testsuite" else list(root.findall("./testsuite"))
+        tests = sum(int(suite.get("tests", "0")) for suite in suites)
+        failed = sum(int(suite.get("failures", "0")) for suite in suites)
+        errors = sum(int(suite.get("errors", "0")) for suite in suites)
+        skipped = sum(int(suite.get("skipped", "0")) for suite in suites)
+        return PytestEvidence(
+            process.returncode,
+            tests - failed - errors - skipped,
+            failed,
+            skipped,
+            errors,
+            detail,
+        )
+
+
+def _i5_tests_passed(result: PytestEvidence, expected: int) -> bool:
+    return (
+        result.returncode == 0
+        and result.passed == expected
+        and result.failed == 0
+        and result.skipped == 0
+        and result.errors == 0
+    )
+
+
 def check_i1() -> CheckResult:
     return _pytest_result(
         "tests/s0/test_runtime_context.py::test_runtime_context_n0_ownership과_checkpoint_leakage",
@@ -123,10 +190,37 @@ def check_i4() -> CheckResult:
 
 
 def check_i5() -> CheckResult:
-    return _pytest_result(
-        "tests/store/test_memory_evidence_store.py::test_query와_evidence의_idempotency_conflict_run_scope를_검증한다",
-        CheckStatus.PARTIAL,
-        "reference store uniqueness passes; PostgreSQL physical constraint pending T2",
+    memory = _run_pytest_evidence((I5_MEMORY_NODE,))
+    if not _i5_tests_passed(memory, 1):
+        return CheckResult(CheckStatus.FAIL, f"Memory uniqueness proof failed: {memory.detail}")
+
+    test_dsn = os.getenv("TEST_POSTGRES_DSN")
+    if not test_dsn:
+        return CheckResult(
+            CheckStatus.PARTIAL,
+            "Memory uniqueness verified; PostgreSQL physical acceptance inactive "
+            "because TEST_POSTGRES_DSN is unavailable",
+        )
+
+    postgres_dsn = os.getenv("POSTGRES_DSN")
+    if postgres_dsn and test_dsn == postgres_dsn:
+        return CheckResult(
+            CheckStatus.FAIL,
+            "PostgreSQL physical acceptance refused because TEST_POSTGRES_DSN "
+            "equals POSTGRES_DSN",
+        )
+
+    physical = _run_pytest_evidence(I5_POSTGRES_NODES)
+    if not _i5_tests_passed(physical, len(I5_POSTGRES_NODES)):
+        return CheckResult(
+            CheckStatus.FAIL,
+            "PostgreSQL physical uniqueness acceptance failed or did not fully execute: "
+            f"passed={physical.passed} failed={physical.failed} "
+            f"errors={physical.errors} skipped={physical.skipped}; {physical.detail}",
+        )
+    return CheckResult(
+        CheckStatus.PASS,
+        "Memory uniqueness and PostgreSQL physical UNIQUE/race acceptance passed",
     )
 
 
@@ -156,6 +250,13 @@ def _import_aliases(tree: ast.AST) -> dict[str, str]:
     return aliases
 
 
+def _canonical_schema_name(node: ast.AST, aliases: dict[str, str]) -> str | None:
+    if not isinstance(node, ast.Name):
+        return None
+    name = aliases.get(node.id, node.id)
+    return name if name in CANONICAL_OUTPUT_SCHEMAS else None
+
+
 def scan_i8_roots(roots: Sequence[Path]) -> CheckResult:
     sources = sorted(path for root in roots if root.is_dir() for path in root.rglob("*.py"))
     sources = [path for path in sources if path.name != "__init__.py" or path.stat().st_size]
@@ -175,11 +276,19 @@ def scan_i8_roots(roots: Sequence[Path]) -> CheckResult:
             if not isinstance(node, ast.Call):
                 continue
             for keyword in node.keywords:
-                if keyword.arg != "output_schema" or not isinstance(keyword.value, ast.Name):
+                if keyword.arg != "output_schema":
                     continue
-                name = aliases.get(keyword.value.id, keyword.value.id)
-                if name in CANONICAL_OUTPUT_SCHEMAS:
+                if name := _canonical_schema_name(keyword.value, aliases):
                     violations.append(f"{path}:{node.lineno} output_schema={name}")
+            invokes_model = (
+                isinstance(node.func, ast.Attribute) and node.func.attr == "invoke"
+            ) or (isinstance(node.func, ast.Name) and node.func.id == "invoke")
+            if (
+                invokes_model
+                and len(node.args) >= 4
+                and (name := _canonical_schema_name(node.args[3], aliases))
+            ):
+                violations.append(f"{path}:{node.lineno} output_schema={name}")
     if violations:
         return CheckResult(CheckStatus.FAIL, "; ".join(violations))
     return CheckResult(CheckStatus.PASS, f"scanned {len(sources)} Python source file(s)")

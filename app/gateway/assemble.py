@@ -78,11 +78,12 @@ async def assemble_evidence(
         )
         new_evidence.append(evidence)
         ids_by_hash[digest] = evidence.evidence_id
-    await store.put_many(run_id, new_evidence)
-    await store.link(
+    await store.put_evidence_batch(
+        run_id,
+        new_evidence,
         [
             EvidenceQueryLink(evidence_id=ids_by_hash[digest], query_id=q.query_id)
             for digest in grouped
-        ]
+        ],
     )
     return new_evidence, batch_duplicates + len(existing)

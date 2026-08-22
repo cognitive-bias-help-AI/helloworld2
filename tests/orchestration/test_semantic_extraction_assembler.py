@@ -212,7 +212,8 @@ def test_structured_S4는_DIRECT_whole과_LLM_external_observation과_Claim을_�
         "local_end": 12,
     }
     claim = result.claims[0]
-    assert claim.user_text_span == claim.normalized_proposition == "공급이 부족하다"
+    assert claim.user_text_span == "공급이 부족하다"
+    assert claim.normalized_proposition == "LLM paraphrase는 정본이 아니다"
     assert claim.span_offset == (4, 12)
     assert claim.verifiable is True
     assert claim.origin is SourceTrace.SURVEY
@@ -668,7 +669,10 @@ def test_Claim_ID는_semantic_body_hash이고_timestamp와_LLM_paraphrase를_제
 
     assert first.claims[0].claim_id == expected_id
     assert first.claims[0].claim_id == second.claims[0].claim_id
-    assert first.claims[0].normalized_proposition == text
+    assert first.claims[0].user_text_span == text
+    assert first.claims[0].span_offset == (0, len(text))
+    assert first.claims[0].normalized_proposition == "paraphrase one"
+    assert second.claims[0].normalized_proposition == "paraphrase two"
 
     later = assemble(
         SemanticExtractionDraft(

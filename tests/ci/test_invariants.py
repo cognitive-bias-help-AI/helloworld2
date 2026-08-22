@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import ci.invariants as invariants
 from ci.invariants import (
+    I8_ROOTS,
+    ROOT,
     CheckResult,
     CheckStatus,
     InvariantSpec,
+    check_i5,
     check_i10_mapping,
     evaluate,
     main,
@@ -110,6 +115,27 @@ def test_i8_detects_direct_and_aliased_canonical_output_schema(tmp_path: Path):
     assert "bad.py" in checked.message
 
 
+def test_i8_detects_fourth_positional_canonical_output_schema(tmp_path: Path):
+    root = tmp_path / "orchestration"
+    root.mkdir()
+    (root / "runtime.py").write_text(
+        "from app.schemas.frozen import Evidence as E\n"
+        'gateway.invoke("SMALL", "n1/v1", view, E)\n',
+        encoding="utf-8",
+    )
+
+    checked = scan_i8_roots((root,))
+
+    assert checked.status is CheckStatus.FAIL
+    assert "output_schema=Evidence" in checked.message
+
+
+def test_i8_roots_cover_intake_review_runtime():
+    runtime = ROOT / "app" / "orchestration" / "intake_review_runtime.py"
+
+    assert any(root == runtime or root in runtime.parents for root in I8_ROOTS)
+
+
 @pytest.mark.parametrize("canonical", ["Evidence", "ClaimEvaluation", "Finding"])
 def test_i8_detects_direct_canonical_names(tmp_path: Path, canonical: str):
     root = tmp_path / "prompts"
@@ -166,3 +192,103 @@ def test_i10_fails_when_state_field_or_store_method_is_missing():
 
     fields.add("report_id")
     assert check_i10_mapping(fields, review_methods, evidence_methods).status is CheckStatus.FAIL
+
+
+def pytest_evidence(*, passed=0, failed=0, skipped=0, errors=0, returncode=0):
+    return SimpleNamespace(
+        returncode=returncode,
+        passed=passed,
+        failed=failed,
+        skipped=skipped,
+        errors=errors,
+        detail="controlled test result",
+    )
+
+
+def test_i5_without_test_dsn_is_partial_and_does_not_use_postgres_dsn(
+    monkeypatch,
+):
+    monkeypatch.delenv("TEST_POSTGRES_DSN", raising=False)
+    monkeypatch.setenv("POSTGRES_DSN", "postgresql://must-not-be-used")
+    calls = []
+
+    def run(nodes):
+        calls.append(nodes)
+        return pytest_evidence(passed=1)
+
+    monkeypatch.setattr("ci.invariants._run_pytest_evidence", run)
+
+    checked = check_i5()
+
+    assert checked.status is CheckStatus.PARTIAL
+    assert "TEST_POSTGRES_DSN is unavailable" in checked.message
+    assert calls == [(invariants.I5_MEMORY_NODE,)]
+
+
+def test_i5_with_active_dsn_passes_only_after_exact_required_tests_execute(monkeypatch):
+    monkeypatch.setenv("TEST_POSTGRES_DSN", "postgresql://test")
+    monkeypatch.delenv("POSTGRES_DSN", raising=False)
+    results = iter((pytest_evidence(passed=1), pytest_evidence(passed=2)))
+    calls = []
+
+    def run(nodes):
+        calls.append(nodes)
+        return next(results)
+
+    monkeypatch.setattr("ci.invariants._run_pytest_evidence", run)
+
+    checked = check_i5()
+
+    assert checked.status is CheckStatus.PASS
+    assert calls == [(invariants.I5_MEMORY_NODE,), invariants.I5_POSTGRES_NODES]
+
+
+def test_i5_with_active_dsn_fails_when_physical_test_fails(monkeypatch):
+    monkeypatch.setenv("TEST_POSTGRES_DSN", "postgresql://test")
+    monkeypatch.setattr(
+        "ci.invariants._run_pytest_evidence",
+        lambda nodes: (
+            pytest_evidence(passed=1)
+            if nodes == (invariants.I5_MEMORY_NODE,)
+            else pytest_evidence(passed=1, failed=1, returncode=1)
+        ),
+    )
+
+    assert check_i5().status is CheckStatus.FAIL
+
+
+def test_i5_with_active_dsn_fails_when_required_test_is_skipped(monkeypatch):
+    monkeypatch.setenv("TEST_POSTGRES_DSN", "postgresql://test")
+    monkeypatch.setattr(
+        "ci.invariants._run_pytest_evidence",
+        lambda nodes: (
+            pytest_evidence(passed=1)
+            if nodes == (invariants.I5_MEMORY_NODE,)
+            else pytest_evidence(passed=1, skipped=1)
+        ),
+    )
+
+    assert check_i5().status is CheckStatus.FAIL
+
+
+def test_i5_with_active_dsn_fails_when_postgres_cannot_execute(monkeypatch):
+    monkeypatch.setenv("TEST_POSTGRES_DSN", "postgresql://unreachable")
+    monkeypatch.setattr(
+        "ci.invariants._run_pytest_evidence",
+        lambda nodes: (
+            pytest_evidence(passed=1)
+            if nodes == (invariants.I5_MEMORY_NODE,)
+            else pytest_evidence(returncode=4)
+        ),
+    )
+
+    assert check_i5().status is CheckStatus.FAIL
+
+
+def test_i5_postgres_selection_is_explicit_and_only_covers_physical_uniqueness():
+    assert invariants.I5_POSTGRES_NODES == (
+        "tests/store/test_sql_evidence_store_postgres.py::"
+        "test_physical_pk_fk_unique_and_composite_ownership",
+        "tests/store/test_sql_evidence_store_postgres.py::"
+        "test_concurrent_conflicting_evidence_hash_race",
+    )

@@ -12,9 +12,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
+from app.gateway.adapters.dart import DartAdapter
+from app.gateway.adapters.kiwoom import KiwoomAdapter
 from app.gateway.adapters.mock import MockAdapter
 from app.gateway.protocols import ProviderAdapter
 from app.schemas.frozen import Query, ReasonCode
+from providers.dart.corp_code import DartCorpCodeResolver
+from providers.kiwoom.core import Environment
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -143,6 +147,146 @@ def _error_cases() -> tuple[AdapterErrorCase, ...]:
 
 
 ALL_ERROR_CASES = _error_cases()
+
+
+class _NoCallKiwoomCore:
+    async def request(self, request):
+        raise AssertionError("common parse contract must not call Kiwoom Core")
+
+
+def _real_adapter_cases() -> tuple[AdapterContractCase, ...]:
+    collected_at = datetime.fromisoformat("2026-08-13T00:00:00+00:00")
+    dart_query = Query(
+        query_id="01K5ZTQ9X7WPCVN2M4H8JRAC1D",
+        scope="stock",
+        intent="context",
+        provider="dart",
+        endpoint="financial_statement",
+        params={
+            "stock_code": "005930",
+            "bsns_year": "2025",
+            "reprt_code": "11011",
+            "fs_div": "CFS",
+            "account_names": ["영업이익"],
+        },
+        created_at=collected_at,
+    )
+    kiwoom_query = Query(
+        query_id="01K5ZTQ9X7WPCVN2M4H8JRAC2D",
+        scope="stock",
+        intent="context",
+        provider="kiwoom",
+        endpoint="current_quote",
+        params={"stock_code": "005930"},
+        created_at=collected_at,
+    )
+    return (
+        AdapterContractCase(
+            case_id="real-dart-financial",
+            adapter=DartAdapter(
+                "test-placeholder", DartCorpCodeResolver({"005930": "00126380"})
+            ),
+            query=dart_query,
+            raw={
+                "status": "000",
+                "list": [{
+                    "rcept_no": "20260331001234",
+                    "corp_name": "삼성전자",
+                    "sj_div": "IS",
+                    "sj_nm": "손익계산서",
+                    "account_id": "dart_OperatingIncomeLoss",
+                    "account_nm": "영업이익",
+                    "thstrm_amount": "9178955000000",
+                    "currency": "KRW",
+                }],
+            },
+            collected_at=collected_at,
+            expectations=(DraftExpectation(
+                source_ref="20260331001234:IS:dart_OperatingIncomeLoss:CFS",
+                expected_span_scope="structured_field",
+                expects_normalized_value=True,
+            ),),
+            fixture_paths=(FIXTURES / "dart" / "metadata.json",),
+        ),
+        AdapterContractCase(
+            case_id="real-kiwoom-current-quote",
+            adapter=KiwoomAdapter(_NoCallKiwoomCore(), environment=Environment.MOCK),
+            query=kiwoom_query,
+            raw={
+                "status": "success",
+                "provider": "kiwoom",
+                "tr": "ka10007",
+                "request_params": {"stk_cd": "005930"},
+                "data": {"stock_code": "005930", "current_price": 71800},
+                "has_more": False,
+                "next_key": None,
+                "raw_reference": {},
+                "error": None,
+            },
+            collected_at=collected_at,
+            expectations=(DraftExpectation(
+                source_ref="ka10007:005930",
+                expected_span_scope="structured_field",
+                expects_normalized_value=True,
+            ),),
+            fixture_paths=(FIXTURES / "kiwoom" / "metadata.json",),
+        ),
+    )
+
+
+REAL_ADAPTER_CASES = _real_adapter_cases()
+
+
+def _real_error_cases() -> tuple[AdapterErrorCase, ...]:
+    dart = REAL_ADAPTER_CASES[0].adapter
+    kiwoom = REAL_ADAPTER_CASES[1].adapter
+    dart_values = (
+        ("auth", "010", ReasonCode.AUTH_FAILED, False, False),
+        ("ip", "012", ReasonCode.IP_MISMATCH, False, False),
+        ("empty", "013", ReasonCode.NO_RESULT, False, False),
+        ("rate", "020", ReasonCode.RATE_LIMIT, True, True),
+        ("upstream", "800", ReasonCode.UPSTREAM_5XX, True, False),
+    )
+    cases = [AdapterErrorCase(
+        case_id=f"real-dart-{case_id}",
+        adapter=dart,
+        raw={"status": status},
+        expected_reason_code=reason,
+        expected_retryable=retryable,
+        hint_required=hint,
+    ) for case_id, status, reason, retryable, hint in dart_values]
+    kiwoom_values = (
+        ("rate", "rate_limit", ReasonCode.RATE_LIMIT, True, True),
+        ("auth", "auth", ReasonCode.AUTH_FAILED, False, False),
+        ("ip", "ip_mismatch", ReasonCode.IP_MISMATCH, False, False),
+        ("server", "http_server", ReasonCode.UPSTREAM_5XX, True, False),
+        ("network", "network", ReasonCode.UPSTREAM_TIMEOUT, True, False),
+    )
+    cases.extend(AdapterErrorCase(
+        case_id=f"real-kiwoom-{case_id}",
+        adapter=kiwoom,
+        raw={
+            "status": "error",
+            "provider": "kiwoom",
+            "tr": "ka10007",
+            "error": {
+                "category": category,
+                "message": "provider error",
+                "retryable": retryable,
+                "code": 1700 if category == "rate_limit" else None,
+                "limit_info": {"retry_after_seconds": 1} if hint else None,
+            },
+        },
+        expected_reason_code=reason,
+        expected_retryable=retryable,
+        hint_required=hint,
+    ) for case_id, category, reason, retryable, hint in kiwoom_values)
+    return tuple(cases)
+
+
+REAL_ERROR_CASES = _real_error_cases()
+CONTRACT_ADAPTER_CASES = (*ALL_ADAPTER_CASES, *REAL_ADAPTER_CASES)
+CONTRACT_ERROR_CASES = (*ALL_ERROR_CASES, *REAL_ERROR_CASES)
 
 
 def validate_registry(

@@ -11,7 +11,7 @@ from app.schemas.frozen import (
 def assemble_unknown_claim_evidence_fallback(
     claim_id: str,
     packet_evidence_ids: list[str],
-    query_id_by_evidence: dict[str, str],
+    query_id_by_evidence: dict[str, str | None],
 ) -> list[ClaimEvidence]:
     return [
         ClaimEvidence(

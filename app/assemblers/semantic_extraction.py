@@ -466,7 +466,9 @@ def assemble_semantic_extraction(
                 external_by_index[index].global_start,
                 external_by_index[index].global_end,
             ),
-            normalized_proposition=external_by_index[index].unit.text_span,
+            normalized_proposition=(
+                external_by_index[index].unit.normalized_proposition or ""
+            ),
             verifiable=True,
             origin=external_by_index[index].segment.origin,
             created_at=run_started_at,

@@ -284,6 +284,23 @@ def _template_questions(targets: tuple[AskTarget, ...]) -> AskBackDraft:
     return validate_ask_back_draft(AskBackDraft(questions=questions), targets)
 
 
+def reconstruct_ask_back_draft(records: list[AskRecord]) -> AskBackDraft:
+    """Rebuild one persisted ask turn for deterministic interrupt replay."""
+
+    ordered = sorted(records, key=lambda item: item.sequence)
+    targets = tuple(
+        AskTarget(
+            slot_id=item.slot_id,
+            kind=item.kind,
+            priority=0,
+            reason=item.reason,
+            required_for=(),
+        )
+        for item in ordered
+    )
+    return _template_questions(targets)
+
+
 def _event_history(records: list[AskRecord], event_key: str) -> tuple[list[AskRecord], dict[int, AskRecord]]:
     prefix = f"{event_key}:ask:"
     current = {item.slot_id: item for item in records if item.ask_key.startswith(prefix)}
@@ -298,6 +315,7 @@ async def _persist_questions(
     targets: tuple[AskTarget, ...],
     projections: tuple[CurrentSlotProjection, ...],
     issues: tuple[ResolutionIssue, ...],
+    claim_ids: tuple[str, ...],
     review_store: ReviewStore,
 ) -> AskBackDraft:
     payload = _template_questions(targets)
@@ -324,6 +342,7 @@ async def _persist_questions(
             issue_slot_ids=ambiguity.slot_ids if ambiguity is not None else (),
             issue_source_key=ambiguity.source_key if ambiguity is not None else None,
             sequence=existing.sequence if existing is not None else next_sequence + index,
+            claim_ids=claim_ids,
         )
         additions.append(record)
     await review_store.put_ask_records(run_id, additions)
@@ -480,6 +499,12 @@ async def process_intake_review(
                 targets=ask_targets,
                 projections=projections,
                 issues=tuple(issues),
+                claim_ids=tuple(
+                    sorted(
+                        set(event.existing_claim_ids)
+                        | {item.claim_id for item in assembly.claims}
+                    )
+                ),
                 review_store=review_store,
             )
         else:

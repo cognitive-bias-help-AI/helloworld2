@@ -62,6 +62,13 @@ def assemble(ds, q=None, c=None, run_id="r", store=None):
     c = c or call(q, run_id)
     store = store or MemoryEvidenceStore()
     run(store.put_queries(run_id, [q]))
+    if (
+        c.run_id == run_id
+        and c.query_id == q.query_id
+        and c.provider == q.provider
+        and c.endpoint == q.endpoint
+    ):
+        run(store.put_provider_calls(run_id, [c]))
     return run(assemble_evidence(ds, q, c, NOW, run_id, FETCHED, store)), store
 
 
@@ -108,6 +115,7 @@ def test_same_run_repeat와_query_link는_멱등이다():
     q = query()
     run(store.put_queries("r", [q]))
     c = call(q)
+    run(store.put_provider_calls("r", [c]))
     first = run(assemble_evidence([draft()], q, c, NOW, "r", FETCHED, store))
     second = run(assemble_evidence([draft()], q, c, NOW, "r", FETCHED, store))
     assert len(first[0]) == 1 and first[1] == 0 and second == ([], 1)
@@ -119,12 +127,37 @@ def test_same_content_new_query는기존_evidence에_link하고_new_run은별도
     store = MemoryEvidenceStore()
     q1, q2 = query(1), query(2)
     run(store.put_queries("r", [q1, q2]))
-    first = run(assemble_evidence([draft()], q1, call(q1), NOW, "r", FETCHED, store))[0][0]
-    assert run(assemble_evidence([draft()], q2, call(q2), NOW, "r", FETCHED, store)) == ([], 1)
+    c1, c2 = call(q1), call(q2, provider_request_id=U(8))
+    run(store.put_provider_calls("r", [c1, c2]))
+    first = run(assemble_evidence([draft()], q1, c1, NOW, "r", FETCHED, store))[0][0]
+    assert run(assemble_evidence([draft()], q2, c2, NOW, "r", FETCHED, store)) == ([], 1)
     assert run(store.evidence_ids_for_queries([q1.query_id, q2.query_id])) == [first.evidence_id]
     q3 = query(3)
     run(store.put_queries("other", [q3]))
-    other = run(assemble_evidence([draft()], q3, call(q3, "other"), NOW, "other", FETCHED, store))[
+    c3 = call(q3, "other", provider_request_id=U(7))
+    run(store.put_provider_calls("other", [c3]))
+    other = run(assemble_evidence([draft()], q3, c3, NOW, "other", FETCHED, store))[
         0
     ]
     assert len(other) == 1 and other[0].evidence_id != first.evidence_id
+
+
+class AtomicOnlyStore(MemoryEvidenceStore):
+    async def put_many(self, run_id, evs):
+        raise AssertionError("legacy put_many path used")
+
+    async def link(self, pairs):
+        raise AssertionError("legacy link path used")
+
+
+def test_assembler_uses_atomic_evidence_adoption_operation():
+    store = AtomicOnlyStore()
+    q = query()
+    c = call(q)
+    run(store.put_queries("r", [q]))
+    run(store.put_provider_calls("r", [c]))
+
+    items, dedup = run(assemble_evidence([draft()], q, c, NOW, "r", FETCHED, store))
+
+    assert len(items) == 1 and dedup == 0
+    assert run(store.evidence_ids_for_queries([q.query_id])) == [items[0].evidence_id]

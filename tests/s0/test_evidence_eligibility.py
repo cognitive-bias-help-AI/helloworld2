@@ -13,6 +13,7 @@ from app.schemas.frozen import (
     ClaimEvaluationDraft,
     Evidence,
     EvidenceQueryLink,
+    ProviderCall,
     Query,
     ReasonCode,
     SourceTrace,
@@ -45,14 +46,16 @@ def claim(
     )
 
 
-def query(n: int, claim_id: str) -> Query:
+def query(n: int, claim_id: str, *, provider: str = "dart") -> Query:
     return Query(
         query_id=uid(8000 + n),
         scope="claim",
         claim_id=claim_id,
         intent="verify",
-        provider="dart",
-        endpoint="disclosure",
+        provider=provider,
+        endpoint={"dart": "disclosure", "kiwoom": "quote", "naver": "search"}[
+            provider
+        ],
         params={"stock_code": "005930"},
         created_at=NOW,
     )
@@ -83,15 +86,40 @@ async def seed_claims(runtime_deps, claims: list[Claim]) -> dict:
 async def seed_queries_and_evidence(runtime_deps, pairs):
     queries = [item[1] for item in pairs]
     await runtime_deps.evidence_store.put_queries("run-s0", queries)
-    evidences = [item[2] for item in pairs if item[2] is not None]
+    evidence_pairs = [(item[1], item[2]) for item in pairs if item[2] is not None]
+    calls = [
+        ProviderCall(
+            provider_request_id=item.provider_request_id,
+            run_id="run-s0",
+            provider=query_item.provider,
+            endpoint=query_item.endpoint,
+            query_id=query_item.query_id,
+            latency_ms=0,
+            idempotency_key=f"{index:064x}",
+            created_at=NOW,
+        )
+        for index, (query_item, item) in enumerate(evidence_pairs, 1)
+    ]
+    evidences = [
+        item.model_copy(
+            update={
+                "source_type": {"dart": "dart", "kiwoom": "quote", "naver": "news"}[
+                    query_item.provider
+                ]
+            }
+        )
+        for query_item, item in evidence_pairs
+    ]
     if evidences:
-        await runtime_deps.evidence_store.put_many("run-s0", evidences)
-        await runtime_deps.evidence_store.link(
+        await runtime_deps.evidence_store.put_provider_calls("run-s0", calls)
+        await runtime_deps.evidence_store.put_evidence_batch(
+            "run-s0",
+            evidences,
             [
                 EvidenceQueryLink(evidence_id=item[2].evidence_id, query_id=item[1].query_id)
                 for item in pairs
                 if item[2] is not None
-            ]
+            ],
         )
     return [item.query_id for item in queries]
 
@@ -180,6 +208,117 @@ async def test_n7_calls_llm_only_for_evidenced_claims_and_preserves_query_lineag
     assert (await runtime_deps.review_store.get_claim_evidence("run-s0", a.claim_id))[0].query_id == qa.query_id
     assert await runtime_deps.review_store.get_claim_evidence("run-s0", b.claim_id) == []
     assert (await runtime_deps.review_store.get_claim_evidence("run-s0", c.claim_id))[0].query_id == qc.query_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "providers", [("dart", "kiwoom"), ("dart", "kiwoom", "naver")]
+)
+async def test_n7_one_claim_accepts_multiple_provider_queries_with_distinct_evidence(
+    providers,
+):
+    runtime_deps = deps()
+    item = claim(1, verifiable=True)
+    state = await seed_claims(runtime_deps, [item])
+    pairs = [
+        (item, query(index, item.claim_id, provider=provider), evidence(index))
+        for index, provider in enumerate(providers, 1)
+    ]
+    state["query_ids"] = await seed_queries_and_evidence(runtime_deps, pairs)
+
+    patch = await make_nodes(runtime_deps)["n7"](state)
+
+    packet = next(view for node, view in runtime_deps.model_gateway.calls if node == "n7")
+    assert {value.evidence_id for value in packet.evidence} == {
+        pair[2].evidence_id for pair in pairs
+    }
+    stored = await runtime_deps.review_store.get_claim_evidence(
+        "run-s0", item.claim_id
+    )
+    assert {value.evidence_id: value.query_id for value in stored} == {
+        pair[2].evidence_id: pair[1].query_id for pair in pairs
+    }
+    assert patch == {"node_results": ["n7:ok"], "counters": {"llm_calls": 1}}
+
+
+@pytest.mark.asyncio
+async def test_n7_same_evidence_linked_to_multiple_claim_queries_uses_none_lineage():
+    runtime_deps = deps()
+    item = claim(1, verifiable=True)
+    state = await seed_claims(runtime_deps, [item])
+    dart = query(1, item.claim_id, provider="dart")
+    kiwoom = query(2, item.claim_id, provider="kiwoom")
+    shared = evidence(1)
+    await runtime_deps.evidence_store.put_queries("run-s0", [dart, kiwoom])
+    await runtime_deps.evidence_store.put_provider_calls(
+        "run-s0",
+        [
+            ProviderCall(
+                provider_request_id=shared.provider_request_id,
+                run_id="run-s0",
+                provider=dart.provider,
+                endpoint=dart.endpoint,
+                query_id=dart.query_id,
+                latency_ms=0,
+                idempotency_key="1" * 64,
+                created_at=NOW,
+            )
+        ],
+    )
+    await runtime_deps.evidence_store.put_evidence_batch(
+        "run-s0",
+        [shared],
+        [
+            EvidenceQueryLink(evidence_id=shared.evidence_id, query_id=dart.query_id),
+            EvidenceQueryLink(evidence_id=shared.evidence_id, query_id=kiwoom.query_id),
+        ],
+    )
+    state["query_ids"] = [dart.query_id, kiwoom.query_id]
+
+    patch = await make_nodes(runtime_deps)["n7"](state)
+
+    stored = await runtime_deps.review_store.get_claim_evidence(
+        "run-s0", item.claim_id
+    )
+    assert len(stored) == 1
+    assert stored[0].evidence_id == shared.evidence_id
+    assert stored[0].query_id is None
+    assert patch == {"node_results": ["n7:ok"], "counters": {"llm_calls": 1}}
+
+
+@pytest.mark.asyncio
+async def test_n7_fails_closed_when_claim_evidence_comes_from_query_outside_state():
+    runtime_deps = deps()
+    item = claim(1, verifiable=True)
+    state = await seed_claims(runtime_deps, [item])
+    included = query(1, item.claim_id, provider="dart")
+    omitted = query(2, item.claim_id, provider="kiwoom")
+    extra = evidence(2)
+    await runtime_deps.evidence_store.put_queries("run-s0", [included, omitted])
+    await runtime_deps.evidence_store.put_provider_calls(
+        "run-s0",
+        [
+            ProviderCall(
+                provider_request_id=extra.provider_request_id,
+                run_id="run-s0",
+                provider=omitted.provider,
+                endpoint=omitted.endpoint,
+                query_id=omitted.query_id,
+                latency_ms=0,
+                idempotency_key="2" * 64,
+                created_at=NOW,
+            )
+        ],
+    )
+    await runtime_deps.evidence_store.put_evidence_batch(
+        "run-s0",
+        [extra.model_copy(update={"source_type": "quote"})],
+        [EvidenceQueryLink(evidence_id=extra.evidence_id, query_id=omitted.query_id)],
+    )
+    state["query_ids"] = [included.query_id]
+
+    with pytest.raises(RuntimeError, match=ReasonCode.CONTRACT_VIOLATION.value):
+        await make_nodes(runtime_deps)["n7"](state)
 
 
 @pytest.mark.asyncio

@@ -4,8 +4,8 @@ import pytest
 
 from app.schemas.frozen import PROVIDER_SOURCE_TYPE, EvidenceDraft
 from tests.adapters.cases import (
-    ALL_ADAPTER_CASES,
-    ALL_ERROR_CASES,
+    CONTRACT_ADAPTER_CASES,
+    CONTRACT_ERROR_CASES,
     assert_no_fixture_secrets,
     assert_no_forbidden_imports,
     expectations_by_source_ref,
@@ -18,7 +18,7 @@ CANONICAL_FIELDS = {
 }
 
 
-@pytest.mark.parametrize("case", ALL_ADAPTER_CASES, ids=lambda case: case.case_id)
+@pytest.mark.parametrize("case", CONTRACT_ADAPTER_CASES, ids=lambda case: case.case_id)
 class TestProviderContract:
     def test_parse_returns_evidence_draft(self, case):
         drafts = case.adapter.parse_response(deepcopy(case.raw), case.query)
@@ -59,10 +59,12 @@ class TestProviderContract:
     def test_raw_span_budget(self, case):
         drafts = case.adapter.parse_response(deepcopy(case.raw), case.query)
         assert all(len(draft.raw_span) <= 500 for draft in drafts)
-        assert PROVIDER_SOURCE_TYPE[case.adapter.name] in raw_span_metrics(ALL_ADAPTER_CASES)
+        assert PROVIDER_SOURCE_TYPE[case.adapter.name] in raw_span_metrics(
+            CONTRACT_ADAPTER_CASES
+        )
 
     def test_normalized_value_coverage(self, case):
-        coverage = normalized_coverage_by_source_type(ALL_ADAPTER_CASES)
+        coverage = normalized_coverage_by_source_type(CONTRACT_ADAPTER_CASES)
         if PROVIDER_SOURCE_TYPE[case.adapter.name] in {"dart", "quote"}:
             assert coverage[PROVIDER_SOURCE_TYPE[case.adapter.name]] >= 0.90
 
@@ -73,10 +75,13 @@ class TestProviderContract:
         assert actual == expected
 
     def test_error_classification(self, case):
+        registry_kind = case.case_id.split("-", 1)[0]
         provider_cases = [
             error_case
-            for error_case in ALL_ERROR_CASES
-            if error_case.adapter.name == case.adapter.name
+            for error_case in CONTRACT_ERROR_CASES
+            if error_case.case_id.startswith(
+                f"{registry_kind}-{case.adapter.name}-"
+            )
         ]
         assert len(provider_cases) == 5
         for error_case in provider_cases:

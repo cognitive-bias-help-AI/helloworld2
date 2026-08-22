@@ -12,7 +12,7 @@ from app.domain.missing import MissingKind, MissingReason
 from app.domain.slot_resolution import ResolutionIssue, build_ambiguity_issue
 from app.schemas.frozen import ULID, NonBlankStr, SlotId
 
-ASK_RECORD_SCHEMA_VERSION = "ask_record/v2"
+ASK_RECORD_SCHEMA_VERSION = "ask_record/v3"
 
 
 class _AskHistoryModel(BaseModel):
@@ -22,7 +22,9 @@ class _AskHistoryModel(BaseModel):
 class AskRecord(_AskHistoryModel):
     """One emitted ask event; issue detail is retained beyond slot projection."""
 
-    schema_version: Literal["ask_record/v1", "ask_record/v2"] = ASK_RECORD_SCHEMA_VERSION
+    schema_version: Literal["ask_record/v1", "ask_record/v2", "ask_record/v3"] = (
+        ASK_RECORD_SCHEMA_VERSION
+    )
     ask_id: ULID
     ask_key: NonBlankStr
     slot_id: SlotId
@@ -32,9 +34,14 @@ class AskRecord(_AskHistoryModel):
     kind: MissingKind
     reason: MissingReason
     sequence: int = Field(ge=0)
+    claim_ids: tuple[ULID, ...] = ()
 
     @model_validator(mode="after")
     def enforce_versioned_issue_lineage(self):
+        if self.claim_ids != tuple(sorted(set(self.claim_ids))):
+            raise ValueError("claim_ids must be sorted and unique")
+        if self.schema_version != "ask_record/v3" and self.claim_ids:
+            raise ValueError("only ask_record/v3 can carry claim_ids")
         if self.schema_version == "ask_record/v1":
             if self.issue_slot_ids or self.issue_source_key is not None:
                 raise ValueError("ask_record/v1 cannot carry v2 issue lineage")
@@ -78,6 +85,7 @@ def build_ask_record(
     issue_id: str | None = None,
     issue_slot_ids: tuple[int, ...] = (),
     issue_source_key: str | None = None,
+    claim_ids: tuple[str, ...] = (),
 ) -> AskRecord:
     return AskRecord(
         ask_id=expected_ask_id(run_id, ask_key),
@@ -89,13 +97,14 @@ def build_ask_record(
         kind=target.kind,
         reason=target.reason,
         sequence=sequence,
+        claim_ids=tuple(sorted(set(claim_ids))),
     )
 
 
 def reconstruct_ambiguity_issue(record: AskRecord) -> ResolutionIssue:
     """Rebuild a v2 ambiguity projection and verify its stored identity."""
 
-    if record.schema_version != "ask_record/v2" or record.kind is not MissingKind.AMBIGUOUS:
+    if record.schema_version not in {"ask_record/v2", "ask_record/v3"} or record.kind is not MissingKind.AMBIGUOUS:
         raise ValueError("AskRecord does not contain reconstructable ambiguity lineage")
     assert record.issue_source_key is not None
     issue = build_ambiguity_issue(

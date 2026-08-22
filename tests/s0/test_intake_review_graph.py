@@ -127,11 +127,83 @@ async def test_compiled_graph는_두번_interrupt_resume후_evidence로_진행�
         initial_state(), cfg, context=ReviewRequestContext(intake=intake)
     )
     assert first.get("__interrupt__"), first
-    second = await graph.ainvoke(Command(resume=answer_interrupt(first)), cfg)
+    first_resume = answer_interrupt(first)
+    second = await graph.ainvoke(Command(resume=first_resume), cfg)
     assert second["__interrupt__"]
-    result = await graph.ainvoke(Command(resume=answer_interrupt(second)), cfg)
+    second_resume = answer_interrupt(second)
+    result = await graph.ainvoke(Command(resume=second_resume), cfg)
 
     assert result["report_id"]
     assert "intake_review:ready_for_evidence" in result["node_results"]
     assert all("n3b:" not in item and "n4:" not in item for item in result["node_results"])
     assert result["counters"]["hitl_reask"] == 2
+    asked_slots = {
+        item["slot_id"]
+        for paused in (first, second)
+        for item in paused["__interrupt__"][0].value["questions"]
+    }
+    resumed_ask_ids = {
+        item["ask_id"]
+        for payload in (first_resume, second_resume)
+        for item in payload["answers"]
+    }
+    ask_records = await runtime_deps.review_store.get_ask_records("run-s0")
+    resume_sources = await runtime_deps.review_store.get_resume_sources("run-s0")
+    observations = await runtime_deps.review_store.get_slot_observations("run-s0")
+
+    assert asked_slots == {1, 2, 3}
+    assert resumed_ask_ids == {item.ask_id for item in ask_records}
+    assert {item.slot_id for item in resume_sources} == asked_slots
+    assert {
+        item.slot_id for item in observations if item.origin is SourceTrace.USER_CONFIRMED
+    } == asked_slots
+    slot3 = [item for item in observations if item.slot_id == 3]
+    assert len(slot3) == 1
+    assert slot3[0].value == "LONG"
+    semantic_fingerprints = [
+        tuple(
+            (segment.segment_id, segment.locked_slot_id, segment.text)
+            for segment in input_view.segments
+        )
+        for node, input_view in runtime_deps.model_gateway.calls
+        if node == "n3"
+    ]
+    assert len(semantic_fingerprints) == len(set(semantic_fingerprints))
+
+
+@pytest.mark.asyncio
+async def test_compiled_graph는_HITL_REASK_LIMIT_이후_세번째_interrupt를_금지한다():
+    resolver = FixtureStockResolver(
+        {},
+        exact_rows={
+            "005930": [
+                InstrumentCandidate(
+                    code="005930",
+                    name="삼성전자",
+                    market="KOSPI",
+                    asset_type="COMMON_STOCK",
+                )
+            ]
+        },
+    )
+    runtime_deps = deps(gateway=AdaptiveGateway(), resolver=resolver)
+    graph = build_graph(runtime_deps, checkpointer=MeasuringInMemorySaver())
+    cfg = config("adaptive-hitl-limit")
+    intake = HybridIntake(
+        schema_version="hybrid_intake/v1",
+        mode=IntakeMode.HYBRID,
+        target=TargetSecurityInput(selected_code="005930", source=SourceTrace.SURVEY),
+        free_text=(FreeTextInput(text=RAW, source=SourceTrace.CHAT_EXPLICIT),),
+    )
+
+    first = await graph.ainvoke(
+        initial_state(), cfg, context=ReviewRequestContext(intake=intake)
+    )
+    second = await graph.ainvoke(Command(resume=answer_interrupt(first)), cfg)
+    result = await graph.ainvoke(Command(resume=answer_interrupt(second)), cfg)
+
+    assert "__interrupt__" not in result
+    assert "intake_review:ready_for_evidence" in result["node_results"]
+    assert result["counters"]["hitl_reask"] == 2
+    records = await runtime_deps.review_store.get_ask_records("run-s0")
+    assert len({item.ask_key.rsplit(":ask:", 1)[0] for item in records}) == 2

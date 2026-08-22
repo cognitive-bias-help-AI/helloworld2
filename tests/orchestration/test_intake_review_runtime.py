@@ -370,7 +370,7 @@ async def test_ambiguity_AskRecord_v2_lineage만으로_resume_issue를_재구성
         for record in await store.get_ask_records("run-1")
         if record.kind.value == "AMBIGUOUS"
     )
-    assert ask.schema_version == "ask_record/v2"
+    assert ask.schema_version == "ask_record/v3"
     assert ask.issue_slot_ids == (4, 5)
     assert ask.issue_source_key == "free_text:0:0:6"
 

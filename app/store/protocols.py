@@ -14,6 +14,7 @@ from app.schemas.frozen import (
     Evidence,
     EvidenceQueryLink,
     Finding,
+    ProviderCall,
     Query,
 )
 
@@ -24,6 +25,16 @@ class EvidenceStore(Protocol):
 
     async def get_queries(self, query_ids: list[str]) -> list[Query]: ...
 
+    async def put_provider_calls(
+        self, run_id: str, calls: list[ProviderCall]
+    ) -> list[str]: ...
+
+    async def get_provider_calls(
+        self, provider_request_ids: list[str]
+    ) -> list[ProviderCall]: ...
+
+    async def provider_calls_for_query(self, query_id: str) -> list[ProviderCall]: ...
+
     async def put_many(self, run_id: str, evs: list[Evidence]) -> list[str]: ...
 
     async def get_many(self, ids: list[str]) -> list[Evidence]: ...
@@ -31,6 +42,13 @@ class EvidenceStore(Protocol):
     async def find_by_sha256(self, run_id: str, hashes: list[str]) -> dict[str, str]: ...
 
     async def link(self, pairs: list[EvidenceQueryLink]) -> None: ...
+
+    async def put_evidence_batch(
+        self,
+        run_id: str,
+        evidence: list[Evidence],
+        links: list[EvidenceQueryLink],
+    ) -> list[str]: ...
 
     async def evidence_ids_for_claim(self, claim_id: str) -> list[str]: ...
 

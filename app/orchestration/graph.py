@@ -22,7 +22,8 @@ def build_graph(deps: RuntimeDeps, *, checkpointer=None):
     graph.add_conditional_edges("n1", lambda s: "n12" if _blocked(s) else "n2")
     graph.add_conditional_edges("n2", lambda s: "n12" if _blocked(s) else "intake_review")
     graph.add_conditional_edges("n5", lambda s: "n12" if _blocked(s) else "n6")
-    for left, right in (("n6", "n7"), ("n7", "n8"), ("n8", "n9")):
+    graph.add_conditional_edges("n6", lambda s: "n12" if _blocked(s) else "n7")
+    for left, right in (("n7", "n8"), ("n8", "n9")):
         graph.add_edge(left, right)
     graph.add_conditional_edges("n9", lambda s: "n12" if _blocked(s) else "n11")
     graph.add_conditional_edges("n11", lambda s: "n12" if s.get("report_id") else "n10")

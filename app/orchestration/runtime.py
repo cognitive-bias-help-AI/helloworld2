@@ -8,6 +8,7 @@ from datetime import datetime
 
 from app.domain.intake import HybridIntake
 from app.domain.protocols import StockResolver
+from app.gateway.admission import ProviderAdmissionController
 from app.gateway.protocols import ProviderAdapter
 from app.models.protocols import ModelGateway
 from app.orchestration.reporting import RenderCandidateStore
@@ -34,6 +35,7 @@ IdFactory = Callable[[], str]
 class RuntimeDeps:
     review_store: ReviewStore
     evidence_store: EvidenceStore
+    provider_admission: ProviderAdmissionController
     model_gateway: ModelGateway
     stock_resolver: StockResolver
     adapters: Mapping[str, ProviderAdapter]

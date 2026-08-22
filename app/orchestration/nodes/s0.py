@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from hashlib import sha256
 
 from langgraph.runtime import Runtime
 from langgraph.types import Command, interrupt
@@ -44,7 +43,7 @@ from app.domain.semantic_source import SEMANTIC_PROJECTION_VERSION
 from app.domain.slots import get_slot_definition
 from app.domain.stock_scope import evaluate_stock_scope
 from app.domain.text_safety import sanitize_user_text
-from app.gateway.assemble import assemble_evidence
+from app.gateway.evidence_gateway import GatewayBudgetExceeded, collect_evidence
 from app.orchestration.drafts import (
     FindingDraft,
     GuardScanResult,
@@ -56,8 +55,13 @@ from app.orchestration.intake_review_runtime import (
     HitlResumeEvent,
     InitialIntakeEvent,
     process_intake_review,
+    reconstruct_ask_back_draft,
 )
-from app.orchestration.limits import REWRITE_LIMIT
+from app.orchestration.limits import (
+    EXTERNAL_CALL_LIMIT,
+    HITL_REASK_LIMIT,
+    REWRITE_LIMIT,
+)
 from app.orchestration.reporting import build_report_artifact
 from app.orchestration.runtime import ReviewRequestContext, RuntimeDeps
 from app.orchestration.state import ReviewState
@@ -68,7 +72,6 @@ from app.schemas.frozen import (
     GuardInput,
     NodeStatus,
     OpposeBlock,
-    ProviderCall,
     Query,
     ReasonCode,
     SourceTrace,
@@ -242,15 +245,113 @@ def make_nodes(deps: RuntimeDeps):
             run_started_at=datetime.fromisoformat(state["started_at"]),
             existing_claim_ids=tuple(claim_ids),
         )
-        while True:
-            result = await process_intake_review(
-                event,
-                review_store=deps.review_store,
-                model_gateway=deps.model_gateway,
+        existing_records = await deps.review_store.get_ask_records(state["run_id"])
+        existing_sources = await deps.review_store.get_resume_sources(state["run_id"])
+        persisted_resume_keys = {item.resume_key for item in existing_sources}
+        for record in existing_records:
+            for claim_id in record.claim_ids:
+                if claim_id not in claim_ids:
+                    claim_ids.append(claim_id)
+        pending_resume_keys = [
+            f"resume:{item.ask_id}"
+            for item in existing_records
+            if f"resume:{item.ask_id}" not in persisted_resume_keys
+        ]
+        last_pending_resume_key = pending_resume_keys[-1] if pending_resume_keys else None
+        replayed_result = None
+        records_by_turn: dict[str, list] = {}
+        for record in existing_records:
+            turn_key = record.ask_key.rsplit(":ask:", 1)[0]
+            records_by_turn.setdefault(turn_key, []).append(record)
+        ordered_turns = sorted(
+            records_by_turn.values(),
+            key=lambda items: min(item.sequence for item in items),
+        )
+        hitl_limit_reached = len(ordered_turns) >= HITL_REASK_LIMIT
+        for records in ordered_turns:
+            draft = reconstruct_ask_back_draft(records)
+            by_slot = {item.slot_id: item for item in records}
+            questions = [
+                {
+                    "ask_id": by_slot[item.slot_id].ask_id,
+                    "slot_id": item.slot_id,
+                    "question": item.question,
+                }
+                for item in draft.questions
+            ]
+            payload = interrupt(
+                {"schema_version": "intake_review_hitl/v1", "questions": questions}
             )
+            if not isinstance(payload, dict):
+                raise ValueError("HITL resume payload must be an object")
+            answers = payload.get("answers")
+            if answers is None and len(questions) == 1 and "answer" in payload:
+                answers = [payload]
+            if not isinstance(answers, list) or len(answers) != len(questions):
+                raise ValueError("HITL resume must answer every emitted question")
+            expected_ids = [item["ask_id"] for item in questions]
+            actual_ids = [item.get("ask_id") for item in answers if isinstance(item, dict)]
+            if actual_ids != expected_ids:
+                raise ValueError("HITL answers must match emitted AskRecords in order")
+            for answer in answers:
+                resume_key = f"resume:{answer['ask_id']}"
+                raw_answer = str(answer.get("answer", "")).strip()
+                if not raw_answer:
+                    raise ValueError("HITL answer must be non-blank")
+                event = HitlResumeEvent(
+                    run_id=state["run_id"],
+                    event_key=resume_key,
+                    input_id=state["input_id"],
+                    ask_id=answer["ask_id"],
+                    raw_answer=raw_answer,
+                    response_state=ResponseState(
+                        answer.get("response_state", "answered")
+                    ),
+                    run_started_at=datetime.fromisoformat(state["started_at"]),
+                    existing_claim_ids=tuple(claim_ids),
+                )
+                if resume_key in persisted_resume_keys:
+                    continue
+                replay_result = await process_intake_review(
+                    event,
+                    review_store=deps.review_store,
+                    model_gateway=deps.model_gateway,
+                    persist_questions=(
+                        resume_key == last_pending_resume_key
+                        and not hitl_limit_reached
+                    ),
+                )
+                replayed_result = replay_result
+                persisted_resume_keys.add(resume_key)
+                for claim_id in replay_result.persisted_claim_ids:
+                    if claim_id not in claim_ids:
+                        claim_ids.append(claim_id)
+        while True:
+            if replayed_result is not None:
+                result = replayed_result
+                replayed_result = None
+            else:
+                result = await process_intake_review(
+                    event,
+                    review_store=deps.review_store,
+                    model_gateway=deps.model_gateway,
+                )
             for claim_id in result.persisted_claim_ids:
                 if claim_id not in claim_ids:
                     claim_ids.append(claim_id)
+
+            if (
+                result.routing_outcome is RoutingOutcome.NEEDS_HITL
+                and hitl_limit_reached
+            ):
+                return Command(
+                    update={
+                        "claim_ids": claim_ids,
+                        "node_results": ["intake_review:ready_for_evidence"],
+                        "counters": {"hitl_reask": HITL_REASK_LIMIT},
+                    },
+                    goto="n5",
+                )
 
             if result.routing_outcome is not RoutingOutcome.NEEDS_HITL:
                 destination = {
@@ -359,48 +460,46 @@ def make_nodes(deps: RuntimeDeps):
 
     async def n6(state: ReviewState):
         queries = await deps.evidence_store.get_queries(state["query_ids"])
-        adopted = 0
-        for query in queries:
-            adapter = deps.adapters[query.provider]
-            request = adapter.build_request(query, deps.clock())
-            raw = await adapter.acall(request)
-            drafts = adapter.parse_response(raw, query)
-            call = ProviderCall(
-                provider_request_id=deps.id_factory(),
+        try:
+            result = await collect_evidence(
                 run_id=state["run_id"],
-                provider=query.provider,
-                endpoint=query.endpoint,
-                query_id=query.query_id,
-                latency_ms=0,
-                idempotency_key=sha256(f"{state['run_id']}|{query.query_id}".encode()).hexdigest(),
-                created_at=deps.clock(),
+                as_of=datetime.fromisoformat(state["as_of"]),
+                queries=queries,
+                adapters=deps.adapters,
+                evidence_store=deps.evidence_store,
+                provider_admission=deps.provider_admission,
+                clock=deps.clock,
+                id_factory=deps.id_factory,
+                current_external_calls=state["counters"].get("external_calls", 0),
+                external_call_limit=EXTERNAL_CALL_LIMIT,
             )
-            evidence, _ = await assemble_evidence(
-                drafts,
-                query,
-                call,
-                deps.clock(),
-                state["run_id"],
-                deps.clock(),
-                deps.evidence_store,
-            )
-            adopted += len(evidence)
+        except GatewayBudgetExceeded:
+            return {"node_results": [f"n6:block:{ReasonCode.BUDGET_EXCEEDED.value}"]}
+        statuses = {value["status"] for value in result.collections.values()}
+        node_status = (
+            "ok"
+            if statuses <= {NodeStatus.OK.value}
+            else "missing"
+            if statuses == {NodeStatus.MISSING.value}
+            else "partial"
+        )
         return {
-            "collections": {"dart": {"status": NodeStatus.OK.value, "items_adopted": adopted}},
-            "node_results": ["n6:ok"],
-            "counters": {"external_calls": len(queries)},
+            "collections": result.collections,
+            "node_results": [f"n6:{node_status}"],
+            "counters": {"external_calls": result.external_calls},
         }
 
     async def n7(state: ReviewState):
         claims = await canonical_claims(state["claim_ids"])
         queries = await deps.evidence_store.get_queries(state["query_ids"])
-        query_by_claim = {}
+        claim_ids = {claim.claim_id for claim in claims}
+        query_ids_by_claim: dict[str, list[str]] = {}
         for query in queries:
             if query.scope != "claim":
                 continue
-            if query.claim_id in query_by_claim:
+            if query.claim_id not in claim_ids:
                 raise RuntimeError(ReasonCode.CONTRACT_VIOLATION.value)
-            query_by_claim[query.claim_id] = query.query_id
+            query_ids_by_claim.setdefault(query.claim_id, []).append(query.query_id)
         llm_calls = 0
         degraded = False
         for claim in claims:
@@ -409,8 +508,16 @@ def make_nodes(deps: RuntimeDeps):
             evidence_ids = await deps.evidence_store.evidence_ids_for_claim(claim.claim_id)
             if not evidence_ids:
                 continue
-            query_id = query_by_claim.get(claim.claim_id)
-            if query_id is None:
+            query_ids = query_ids_by_claim.get(claim.claim_id)
+            if not query_ids:
+                raise RuntimeError(ReasonCode.CONTRACT_VIOLATION.value)
+            query_ids_by_evidence: dict[str, set[str]] = {}
+            for query_id in query_ids:
+                for evidence_id in await deps.evidence_store.evidence_ids_for_queries(
+                    [query_id]
+                ):
+                    query_ids_by_evidence.setdefault(evidence_id, set()).add(query_id)
+            if set(query_ids_by_evidence) != set(evidence_ids):
                 raise RuntimeError(ReasonCode.CONTRACT_VIOLATION.value)
             evidence = await deps.evidence_store.get_many(evidence_ids)
             view = EvidencePacket(
@@ -427,7 +534,14 @@ def make_nodes(deps: RuntimeDeps):
                 ],
             )
             draft = None
-            mapping = {evidence_id: query_id for evidence_id in evidence_ids}
+            mapping = {
+                evidence_id: (
+                    next(iter(linked_query_ids))
+                    if len(linked_query_ids) == 1
+                    else None
+                )
+                for evidence_id, linked_query_ids in query_ids_by_evidence.items()
+            }
             for _ in range(2):
                 candidate, _ = await _invoke(deps, "n7", "SMALL", view, ClaimStanceDraft)
                 llm_calls += 1

@@ -13,6 +13,7 @@ from app.domain.intake import (
 )
 from app.domain.semantic import SemanticKind
 from app.gateway.adapters.mock import MockAdapter
+from app.gateway.admission import ProviderAdmissionController
 from app.orchestration.drafts import (
     AskBackDraft,
     AskBackQuestionDraft,
@@ -221,6 +222,7 @@ def deps(gateway=None, resolver=None):
     return RuntimeDeps(
         review_store=MemoryReviewStore(),
         evidence_store=MemoryEvidenceStore(),
+        provider_admission=ProviderAdmissionController({"dart": 3, "kiwoom": 1}),
         model_gateway=gateway,
         stock_resolver=resolver,
         adapters={"dart": MockAdapter("dart")},

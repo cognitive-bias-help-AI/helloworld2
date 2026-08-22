@@ -6,6 +6,9 @@ import pytest
 from tests.adapters.cases import (
     ALL_ADAPTER_CASES,
     ALL_ERROR_CASES,
+    CONTRACT_ADAPTER_CASES,
+    CONTRACT_ERROR_CASES,
+    REAL_ADAPTER_CASES,
     RawSpanMetric,
     coverage_ratio,
     nearest_rank_p95,
@@ -16,6 +19,11 @@ from tests.adapters.cases import (
 def test_registered_cases_are_valid():
     validate_registry(ALL_ADAPTER_CASES, ALL_ERROR_CASES)
     assert {case.adapter.name for case in ALL_ADAPTER_CASES} == {"dart", "naver", "kiwoom"}
+
+
+def test_real_registry는_검증된_DART와_Kiwoom만_포함한다():
+    assert {case.adapter.name for case in REAL_ADAPTER_CASES} == {"dart", "kiwoom"}
+    validate_registry(CONTRACT_ADAPTER_CASES, CONTRACT_ERROR_CASES)
 
 
 @pytest.mark.parametrize(
