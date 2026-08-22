@@ -89,26 +89,73 @@ def build_judgment_review_drafts(
     return drafts
 
 
-def build_review_slot_views(findings: Iterable[Finding]) -> list[SlotTextView]:
+def build_review_slot_views(
+    findings: Iterable[Finding],
+    evaluations: Iterable[ClaimEvaluation],
+) -> list[SlotTextView]:
+    evaluation_by_id = {
+        item.claim_evaluation_id: item for item in evaluations
+    }
     messages = {
-        (7, "mismatch"): (
-            "현재 판단과 반대되는 근거도 확인되었습니다. 기존 근거와 함께 비교해볼 필요가 있습니다."
-        ),
         (7, "unverified"): "반대 방향 근거 검증이 완료되지 않았습니다.",
         (8, "missing"): "현재 판단을 다시 검토할 조건이 명확하지 않습니다.",
     }
-    return [
-        SlotTextView(
-            slot_no=finding.slot_id,
-            text=messages.get(
-                (finding.slot_id, finding.kind),
-                "현재 확인된 근거와 사용자 입력을 함께 다시 점검할 필요가 있습니다.",
-            ),
-            quoted=False,
-            citations=finding.citations,
-        )
-        for finding in sorted(
+    views = []
+    for finding in sorted(
             findings,
             key=lambda item: (item.slot_id, item.kind, item.finding_id),
+        ):
+        evaluation = None
+        if finding.claim_evaluation_id is not None:
+            evaluation = evaluation_by_id.get(finding.claim_evaluation_id)
+            if evaluation is None:
+                raise ValueError("Finding references an unknown ClaimEvaluation")
+        is_counter_mismatch = (
+            finding.slot_id == 7
+            and finding.kind == "mismatch"
+            and evaluation is not None
+            and bool(
+                {item.evidence_id for item in finding.citations}
+                & set(evaluation.oppose_evidence_ids)
+            )
         )
+        text = (
+            "현재 판단과 반대되는 근거도 확인되었습니다. 기존 근거와 함께 비교해볼 필요가 있습니다."
+            if is_counter_mismatch
+            else messages.get(
+                (finding.slot_id, finding.kind),
+                "현재 확인된 근거와 사용자 입력을 함께 다시 점검할 필요가 있습니다.",
+            )
+        )
+        views.append(
+            SlotTextView(
+                slot_no=finding.slot_id,
+                text=text,
+                quoted=False,
+                citations=finding.citations,
+            )
+        )
+    return views
+
+
+def build_slot_projection_review_views(
+    projections: Iterable[CurrentSlotProjection],
+) -> list[SlotTextView]:
+    messages = {
+        CurrentSlotStatus.CONFLICT: (
+            "현재 제시된 판단 변경 조건에 서로 다른 내용이 있어 하나의 조건으로 확정하기 어렵습니다."
+        ),
+        CurrentSlotStatus.AMBIGUOUS: (
+            "현재 제시된 판단 변경 조건의 의미가 명확하지 않아 하나의 조건으로 확정하기 어렵습니다."
+        ),
+    }
+    return [
+        SlotTextView(
+            slot_no=8,
+            text=messages[projection.status],
+            quoted=False,
+            citations=[],
+        )
+        for projection in projections
+        if projection.slot_id == 8 and projection.status in messages
     ]

@@ -7,7 +7,10 @@ import httpx
 import pytest
 
 import app.orchestration.graph as graph_module
+import app.orchestration.nodes.s0 as nodes_module
 from app.contexts.views import IntegrationView
+from app.domain.intake import ResponseState
+from app.domain.slot_resolution import CurrentSlotProjection, CurrentSlotStatus
 from app.gateway.adapters.naver import NaverAdapter
 from app.gateway.admission import ProviderAdmissionController
 from app.orchestration.drafts import FindingDraft, RenderDraft, RenderedSlotDraft
@@ -665,6 +668,7 @@ async def test_counter_news_network_free_vertical_reaches_verified_oppose_block(
         assert by_slot[7].citations
         assert "다시 검토할 조건" in by_slot[8].text
         assert by_slot[8].citations == []
+        assert sum(slot.slot_no == 8 for slot in render_view.slots) == 1
 
         guard = await make_nodes(runtime_deps)["n10"](state | generate)
         assert guard["node_results"] == ["n10:pass"]
@@ -677,6 +681,41 @@ async def test_counter_news_network_free_vertical_reaches_verified_oppose_block(
         assert all(not slot["citations"] for slot in report["rendered_slots"] if slot["slot_no"] == 8)
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, expected",
+    [
+        (CurrentSlotStatus.CONFLICT, "서로 다른 내용"),
+        (CurrentSlotStatus.AMBIGUOUS, "의미가 명확하지 않아"),
+    ],
+)
+async def test_n11_preserves_slot8_conflict_and_ambiguity_as_ephemeral_review(
+    monkeypatch, status, expected
+):
+    runtime_deps = deps()
+    state = initial_state()
+    projection = CurrentSlotProjection(
+        slot_id=8,
+        status=status,
+        issue_ids=("issue-8",),
+        response_state=ResponseState.UNKNOWN,
+    )
+
+    async def load_projection(*args, **kwargs):
+        return (projection,)
+
+    monkeypatch.setattr(nodes_module, "load_current_slot_projections", load_projection)
+
+    patch = await make_nodes(runtime_deps)["n11"](state)
+
+    assert patch["node_results"] == ["n11:generate"]
+    render_view = next(view for node, view in runtime_deps.model_gateway.calls if node == "n11")
+    assert len(render_view.slots) == 1
+    assert expected in render_view.slots[0].text
+    assert render_view.slots[0].citations == []
+    assert runtime_deps.review_store._findings == {}
 
 
 class EmptySafeGateway(FlowGateway):
@@ -862,14 +901,21 @@ async def test_n9_zero_evidence_backed_is_deterministic_terminal(case):
     assert "counters" not in patch
     assert [node for node, _ in runtime_deps.model_gateway.calls if node == "n9"] == []
     if case == "no_evidence_only":
-        assert len(findings) == 1
+        assert len(findings) == 2
         assert (findings[0].slot_id, findings[0].kind, findings[0].citations) == (
             2,
             "unverified",
             [],
         )
+        assert (findings[1].slot_id, findings[1].kind, findings[1].citations) == (
+            8,
+            "missing",
+            [],
+        )
     else:
-        assert findings == []
+        assert [(finding.slot_id, finding.kind, finding.citations) for finding in findings] == [
+            (8, "missing", [])
+        ]
 
 
 def fake_graph_nodes(block_at: str):

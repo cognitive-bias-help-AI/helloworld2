@@ -6,8 +6,9 @@ from app.orchestration.judgment_review import (
     build_judgment_review_drafts,
     build_missing_slot_views,
     build_review_slot_views,
+    build_slot_projection_review_views,
 )
-from app.schemas.frozen import CitationRef, ClaimEvaluation, OpposeBlock, ReasonCode
+from app.schemas.frozen import CitationRef, ClaimEvaluation, Finding, OpposeBlock, ReasonCode
 
 NOW = datetime(2026, 8, 22, tzinfo=UTC)
 
@@ -32,20 +33,22 @@ def projection(slot_id: int, status: CurrentSlotStatus) -> CurrentSlotProjection
     )
 
 
-def evaluation(*, oppose_ids=()) -> ClaimEvaluation:
-    ids = list(oppose_ids)
+def evaluation(*, oppose_ids=(), support_ids=()) -> ClaimEvaluation:
+    oppose = list(oppose_ids)
+    support = list(support_ids)
+    ids = [*oppose, *support]
     return ClaimEvaluation(
         claim_evaluation_id=uid(1),
         claim_id=uid(2),
         citations=[
             CitationRef(evidence_id=item, span=f"span-{index}") for index, item in enumerate(ids)
         ],
-        support_evidence_ids=[],
-        oppose_evidence_ids=ids,
+        support_evidence_ids=support,
+        oppose_evidence_ids=oppose,
         neutral_evidence_ids=[],
         unknown_evidence_ids=[],
         numeric_checks=[],
-        verdict="contradicted" if ids else "unverifiable",
+        verdict="contradicted" if oppose else "support" if support else "unverifiable",
         missing_dimensions=[],
         uncertainty_codes=[],
         created_at=NOW,
@@ -147,9 +150,60 @@ def test_review_slot_views_keep_external_citation_only_on_counter_review():
     from app.assemblers.findings import assemble_findings
 
     findings = assemble_findings(drafts, [item], [uid(10), uid(11)], NOW)
-    views = build_review_slot_views(findings)
+    views = build_review_slot_views(findings, [item])
     by_slot = {view.slot_no: view for view in views}
     assert by_slot[7].citations[0].evidence_id == evidence_id
     assert by_slot[8].citations == []
     assert "반대되는 근거" in by_slot[7].text
     assert "다시 검토할 조건" in by_slot[8].text
+
+
+def test_support_mismatch_is_not_rendered_as_counter_evidence():
+    evidence_id = uid(4)
+    item = evaluation(support_ids=[evidence_id])
+    finding = Finding(
+        finding_id=uid(20),
+        slot_id=7,
+        kind="mismatch",
+        citations=[CitationRef(evidence_id=evidence_id, span="span-0")],
+        claim_evaluation_id=item.claim_evaluation_id,
+        created_at=NOW,
+    )
+
+    view = build_review_slot_views([finding], [item])[0]
+
+    assert "반대되는 근거" not in view.text
+    assert view.citations[0].evidence_id == evidence_id
+
+
+def test_mismatch_with_unknown_evaluation_reference_fails_closed():
+    finding = Finding(
+        finding_id=uid(21),
+        slot_id=7,
+        kind="mismatch",
+        citations=[CitationRef(evidence_id=uid(5), span="span")],
+        claim_evaluation_id=uid(999),
+        created_at=NOW,
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown ClaimEvaluation"):
+        build_review_slot_views([finding], [evaluation()])
+
+
+def test_slot8_conflict_and_ambiguity_have_distinct_ephemeral_render_views():
+    conflict = build_slot_projection_review_views(
+        [projection(8, CurrentSlotStatus.CONFLICT)]
+    )
+    ambiguous = build_slot_projection_review_views(
+        [projection(8, CurrentSlotStatus.AMBIGUOUS)]
+    )
+    absent = build_slot_projection_review_views(
+        [projection(8, CurrentSlotStatus.ABSENT)]
+    )
+
+    assert "서로 다른 내용" in conflict[0].text
+    assert "의미가 명확하지 않아" in ambiguous[0].text
+    assert conflict[0].citations == ambiguous[0].citations == []
+    assert absent == []

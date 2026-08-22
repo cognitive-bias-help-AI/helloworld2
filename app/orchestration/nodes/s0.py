@@ -64,6 +64,7 @@ from app.orchestration.judgment_review import (
     build_judgment_review_drafts,
     build_missing_slot_views,
     build_review_slot_views,
+    build_slot_projection_review_views,
 )
 from app.orchestration.limits import (
     EXTERNAL_CALL_LIMIT,
@@ -743,20 +744,19 @@ def make_nodes(deps: RuntimeDeps):
             )
             for item in oppose_evidence
         }
-        if evidence_backed:
-            deterministic_drafts.extend(
-                build_judgment_review_drafts(
-                    evaluations=evaluations,
-                    oppose=oppose,
-                    counter_claim_ids={
-                        query.claim_id
-                        for query in counter_queries
-                        if query.claim_id is not None
-                    },
-                    projections=projections,
-                    citation_by_evidence_id=oppose_citations,
-                )
+        deterministic_drafts.extend(
+            build_judgment_review_drafts(
+                evaluations=evaluations,
+                oppose=oppose,
+                counter_claim_ids={
+                    query.claim_id
+                    for query in counter_queries
+                    if query.claim_id is not None
+                },
+                projections=projections,
+                citation_by_evidence_id=oppose_citations,
             )
+        )
         view = IntegrationView(
             evaluations=evidence_backed,
             oppose=oppose,
@@ -881,7 +881,18 @@ def make_nodes(deps: RuntimeDeps):
         )
         evidence = await deps.evidence_store.get_many(evidence_ids)
         findings = await deps.review_store.get_findings(state["finding_ids"])
-        review_slots = build_review_slot_views(findings)
+        evaluations = await deps.review_store.get_claim_evaluations(
+            state["claim_evaluation_ids"]
+        )
+        projections = await load_current_slot_projections(
+            state["run_id"],
+            input_id=state.get("input_id"),
+            review_store=deps.review_store,
+        )
+        review_slots = [
+            *build_review_slot_views(findings, evaluations),
+            *build_slot_projection_review_views(projections),
+        ]
         view = RenderView(
             slots=(
                 review_slots
