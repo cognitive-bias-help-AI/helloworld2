@@ -16,6 +16,7 @@ from app.orchestration.drafts import (
 from app.orchestration.intake_review_runtime import (
     HitlResumeEvent,
     InitialIntakeEvent,
+    load_current_slot_projections,
     process_intake_review,
     validate_ask_back_draft,
 )
@@ -77,6 +78,51 @@ def complete_structured():
         answer(5, "장기 성장"),
         answer(8, "전제가 바뀌면 재검토"),
     )
+
+
+@pytest.mark.asyncio
+async def test_current_slot_projection_can_be_reloaded_from_persisted_runtime_history():
+    store = MemoryReviewStore()
+    input_id = await stored_input(store, structured=complete_structured())
+    draft = SemanticExtractionDraft(
+        units=[
+            SemanticUnitDraft(
+                segment_id="structured:5",
+                slot_id=5,
+                text_span="장기 성장",
+                span_offset=(0, len("장기 성장")),
+                normalized_proposition=None,
+                proposed_value=None,
+                semantic_kind=SemanticKind.USER_PREFERENCE,
+            ),
+            SemanticUnitDraft(
+                segment_id="structured:8",
+                slot_id=8,
+                text_span="전제가 바뀌면 재검토",
+                span_offset=(0, len("전제가 바뀌면 재검토")),
+                normalized_proposition=None,
+                proposed_value=None,
+                semantic_kind=SemanticKind.DECISION_RULE,
+            ),
+        ]
+    )
+    await process_intake_review(
+        InitialIntakeEvent(
+            run_id="run-1",
+            event_key="initial-projection",
+            input_id=input_id,
+            run_started_at=NOW,
+        ),
+        review_store=store,
+        model_gateway=Gateway([draft]),
+    )
+
+    projections = await load_current_slot_projections(
+        "run-1", input_id=input_id, review_store=store
+    )
+
+    assert projections[6].slot_id == 7 and projections[6].status.value == "ABSENT"
+    assert projections[7].slot_id == 8 and projections[7].status.value == "RESOLVED"
 
 
 @pytest.mark.asyncio

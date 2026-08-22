@@ -249,6 +249,31 @@ async def _load_hydrated_history(
     return tuple(hydrated)
 
 
+async def load_current_slot_projections(
+    run_id: str,
+    *,
+    input_id: str | None,
+    review_store: ReviewStore,
+) -> tuple[CurrentSlotProjection, ...]:
+    """Rebuild current Slot state from persisted intake and semantic history."""
+    if input_id is None:
+        observations = await review_store.get_slot_observations(run_id)
+        if observations:
+            raise ValueError("persisted Slot observations require an input_id")
+        return resolve_current_slots(())
+
+    input_body = await review_store.get_input(input_id)
+    hydrated = await _load_hydrated_history(run_id, input_body, review_store)
+    records = await review_store.get_ask_records(run_id)
+    issues = tuple(
+        reconstruct_ambiguity_issue(record)
+        for record in records
+        if record.schema_version in {"ask_record/v2", "ask_record/v3"}
+        and record.kind is MissingKind.AMBIGUOUS
+    )
+    return resolve_current_slots(hydrated, issues=issues)
+
+
 def validate_ask_back_draft(
     draft: AskBackDraft,
     targets: tuple[AskTarget, ...],

@@ -56,8 +56,14 @@ from app.orchestration.hitl import StockChoiceRequest, StockChoiceResume, select
 from app.orchestration.intake_review_runtime import (
     HitlResumeEvent,
     InitialIntakeEvent,
+    load_current_slot_projections,
     process_intake_review,
     reconstruct_ask_back_draft,
+)
+from app.orchestration.judgment_review import (
+    build_judgment_review_drafts,
+    build_missing_slot_views,
+    build_review_slot_views,
 )
 from app.orchestration.limits import (
     EXTERNAL_CALL_LIMIT,
@@ -70,6 +76,7 @@ from app.orchestration.runtime import ReviewRequestContext, RuntimeDeps
 from app.orchestration.state import ReviewState
 from app.orchestration.validators.citations import validate_citations
 from app.schemas.frozen import (
+    CitationRef,
     ClaimEvaluationDraft,
     ClaimStanceDraft,
     GuardInput,
@@ -721,10 +728,39 @@ def make_nodes(deps: RuntimeDeps):
             evidence_ids_by_query=evidence_ids_by_query,
             oppose_evidence_ids=oppose_evidence_ids,
         )
+        projections = await load_current_slot_projections(
+            state["run_id"],
+            input_id=state.get("input_id"),
+            review_store=deps.review_store,
+        )
+        oppose_evidence = await deps.evidence_store.get_many(
+            sorted(oppose_evidence_ids)
+        )
+        oppose_citations = {
+            item.evidence_id: CitationRef(
+                evidence_id=item.evidence_id,
+                span=item.raw_span,
+            )
+            for item in oppose_evidence
+        }
+        if evidence_backed:
+            deterministic_drafts.extend(
+                build_judgment_review_drafts(
+                    evaluations=evaluations,
+                    oppose=oppose,
+                    counter_claim_ids={
+                        query.claim_id
+                        for query in counter_queries
+                        if query.claim_id is not None
+                    },
+                    projections=projections,
+                    citation_by_evidence_id=oppose_citations,
+                )
+            )
         view = IntegrationView(
             evaluations=evidence_backed,
             oppose=oppose,
-            missing_slots=[],
+            missing_slots=build_missing_slot_views(projections),
         )
         if not evidence_backed:
             ids = [deps.id_factory() for _ in deterministic_drafts]
@@ -844,8 +880,21 @@ def make_nodes(deps: RuntimeDeps):
             }
         )
         evidence = await deps.evidence_store.get_many(evidence_ids)
+        findings = await deps.review_store.get_findings(state["finding_ids"])
+        review_slots = build_review_slot_views(findings)
         view = RenderView(
-            slots=[SlotTextView(slot_no=1, text="검증 결과", quoted=False, citations=[])],
+            slots=(
+                review_slots
+                if review_slots
+                else [
+                    SlotTextView(
+                        slot_no=1,
+                        text="검증 결과",
+                        quoted=False,
+                        citations=[],
+                    )
+                ]
+            ),
             banners=["COVERAGE_TRUNCATED"]
             if any("partial" in x for x in state["node_results"])
             else [],

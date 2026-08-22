@@ -10,7 +10,7 @@ import app.orchestration.graph as graph_module
 from app.contexts.views import IntegrationView
 from app.gateway.adapters.naver import NaverAdapter
 from app.gateway.admission import ProviderAdmissionController
-from app.orchestration.drafts import FindingDraft
+from app.orchestration.drafts import FindingDraft, RenderDraft, RenderedSlotDraft
 from app.orchestration.nodes.s0 import make_nodes
 from app.schemas.frozen import (
     CitationRef,
@@ -464,6 +464,49 @@ class CounterStanceGateway(FlowGateway):
         return await super().invoke(slot, prompt_version, input_view, output_schema)
 
 
+class JudgmentRenderGateway(CounterStanceGateway):
+    async def invoke(self, slot, prompt_version, input_view, output_schema):
+        if output_schema is RenderDraft:
+            self.calls.append(("n11", input_view))
+            return RenderDraft(
+                slots=[
+                    RenderedSlotDraft(
+                        slot_no=item.slot_no,
+                        text=item.text,
+                        citations=item.citations,
+                    )
+                    for item in input_view.slots
+                ]
+            ), Usage(model_slot=slot, prompt_tokens=0, output_tokens=0, ctx_chars=1)
+        return await super().invoke(slot, prompt_version, input_view, output_schema)
+
+
+class OpposeWithoutDraftCitationGateway(CounterStanceGateway):
+    async def invoke(self, slot, prompt_version, input_view, output_schema):
+        if output_schema is ClaimEvaluationDraft:
+            self.calls.append(("n8", input_view))
+            evidence_ids = [item.evidence_id for item in input_view.evidence]
+            return ClaimEvaluationDraft(
+                citations=[],
+                support_evidence_ids=[],
+                oppose_evidence_ids=evidence_ids,
+                neutral_evidence_ids=[],
+                unknown_evidence_ids=[],
+                verdict="contradicted",
+                missing_dimensions=[],
+                uncertainty_codes=[],
+            ), Usage(model_slot=slot, prompt_tokens=0, output_tokens=0, ctx_chars=1)
+        if output_schema is FindingDraft:
+            self.calls.append(("n9", input_view))
+            return FindingDraft(
+                slot_id=7,
+                kind="unverified",
+                citations=[],
+                claim_evaluation_id=input_view.evaluations[0].claim_evaluation_id,
+            ), Usage(model_slot=slot, prompt_tokens=0, output_tokens=0, ctx_chars=1)
+        return await super().invoke(slot, prompt_version, input_view, output_schema)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stance, expected_count", [("oppose", 1), ("support", 0)])
 async def test_counter_query_intent_does_not_force_stance_and_n9_uses_runtime_lineage(
@@ -504,6 +547,31 @@ async def test_counter_query_intent_does_not_force_stance_and_n9_uses_runtime_li
 
 
 @pytest.mark.asyncio
+async def test_n9_counter_review_derives_citation_from_canonical_evidence():
+    runtime_deps = deps(gateway=OpposeWithoutDraftCitationGateway("oppose"))
+    item = claim(12, verifiable=True, slot_id=7, proposition="HBM 반대 뉴스")
+    state = await seed_claims(runtime_deps, [item])
+    counter = query(12, item.claim_id, provider="naver").model_copy(
+        update={"intent": "counter", "params": {"query": "005930"}}
+    )
+    proof = evidence(12).model_copy(update={"source_type": "news"})
+    state["query_ids"] = await seed_queries_and_evidence(
+        runtime_deps, [(item, counter, proof)]
+    )
+    await make_nodes(runtime_deps)["n7"](state)
+    n8_patch = await make_nodes(runtime_deps)["n8"](state)
+    state["claim_evaluation_ids"] = n8_patch["claim_evaluation_ids"]
+
+    n9_patch = await make_nodes(runtime_deps)["n9"](state)
+
+    findings = await runtime_deps.review_store.get_findings(n9_patch["finding_ids"])
+    mismatch = next(finding for finding in findings if finding.kind == "mismatch")
+    assert mismatch.citations == [
+        CitationRef(evidence_id=proof.evidence_id, span=proof.raw_span)
+    ]
+
+
+@pytest.mark.asyncio
 async def test_counter_news_network_free_vertical_reaches_verified_oppose_block():
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -525,12 +593,27 @@ async def test_counter_news_network_free_vertical_reaches_verified_oppose_block(
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     try:
         runtime_deps = replace(
-            deps(gateway=CounterStanceGateway("oppose")),
+            deps(gateway=JudgmentRenderGateway("oppose")),
             adapters={"naver": NaverAdapter("id", "secret", client=client)},
             provider_admission=ProviderAdmissionController({"naver": 3}),
         )
         item = claim(21, verifiable=True, slot_id=7, proposition="HBM 수요 둔화 뉴스")
         state = await seed_claims(runtime_deps, [item])
+        state["input_id"] = await runtime_deps.review_store.put_input(
+            "run-s0",
+            {
+                "schema_version": "hybrid_intake/v1",
+                "semantic_projection_version": "semantic_projection/v1",
+                "masked_intake": {
+                    "mode": "HYBRID",
+                    "target": None,
+                    "structured": [],
+                    "free_text": [],
+                },
+                "masked_input": "",
+                "masked_security_input": "",
+            },
+        )
 
         n5_patch = await make_nodes(runtime_deps)["n5"](state)
         state["query_ids"] = n5_patch["query_ids"]
@@ -546,11 +629,52 @@ async def test_counter_news_network_free_vertical_reaches_verified_oppose_block(
         await make_nodes(runtime_deps)["n7"](state)
         n8_patch = await make_nodes(runtime_deps)["n8"](state)
         state["claim_evaluation_ids"] = n8_patch["claim_evaluation_ids"]
+        evaluation = (await runtime_deps.review_store.get_claim_evaluations(
+            state["claim_evaluation_ids"]
+        ))[0]
         n9_patch = await make_nodes(runtime_deps)["n9"](state)
 
         assert n9_patch["oppose"]["status"] == "verified"
         assert n9_patch["oppose"]["count"] == 1
         assert n9_patch["oppose"]["queries"] == ["005930"]
+        integration_view = next(
+            view for node, view in runtime_deps.model_gateway.calls if node == "n9"
+        )
+        assert {(item.slot_id, item.status) for item in integration_view.missing_slots} == {
+            (7, "absent"),
+            (8, "absent"),
+        }
+        findings = await runtime_deps.review_store.get_findings(n9_patch["finding_ids"])
+        assert {(finding.slot_id, finding.kind) for finding in findings} >= {
+            (7, "mismatch"),
+            (8, "missing"),
+        }
+        counter_finding = next(item for item in findings if item.kind == "mismatch")
+        assert counter_finding.citations[0].evidence_id in evaluation.oppose_evidence_ids
+        change_finding = next(item for item in findings if item.slot_id == 8)
+        assert change_finding.citations == []
+
+        state["finding_ids"] = n9_patch["finding_ids"]
+        state["oppose"] = n9_patch["oppose"]
+        state["node_results"] += n9_patch["node_results"]
+        generate = await make_nodes(runtime_deps)["n11"](state)
+        assert generate["node_results"] == ["n11:generate"]
+        render_view = next(view for node, view in runtime_deps.model_gateway.calls if node == "n11")
+        by_slot = {slot.slot_no: slot for slot in render_view.slots}
+        assert "반대되는 근거" in by_slot[7].text
+        assert by_slot[7].citations
+        assert "다시 검토할 조건" in by_slot[8].text
+        assert by_slot[8].citations == []
+
+        guard = await make_nodes(runtime_deps)["n10"](state | generate)
+        assert guard["node_results"] == ["n10:pass"]
+        publish = await make_nodes(runtime_deps)["n11"](state | generate | guard)
+        assert publish["node_results"] == ["n11:publish"]
+        assert publish["report_id"]
+        report = await runtime_deps.review_store.get_report(publish["report_id"])
+        assert report is not None
+        assert any(slot["citations"] for slot in report["rendered_slots"] if slot["slot_no"] == 7)
+        assert all(not slot["citations"] for slot in report["rendered_slots"] if slot["slot_no"] == 8)
     finally:
         await client.aclose()
 
