@@ -1,0 +1,139 @@
+[
+  {
+    "code": "005930",
+    "name": "삼성전자",
+    "aliases": ["삼성전자", "Samsung Electronics", "SEC"],
+    "former_names": [],
+    "affiliates": ["삼성전자서비스", "삼성디스플레이", "삼성SDI", "삼성물산"],
+    "exclude_terms": []
+  },
+  {
+    "code": "000880",
+    "name": "한화",
+    "aliases": ["(주)한화", "한화 주식회사"],
+    "former_names": ["한국화약", "한국화약그룹"],
+    "affiliates": [
+      "한화솔루션",
+      "한화에어로스페이스",
+      "한화오션",
+      "한화생명",
+      "한화투자증권",
+      "한화시스템",
+      "한화토탈에너지스"
+    ],
+    "exclude_terms": [
+      "한화 이글스",
+      "한화이글스",
+      "이글스",
+      "KBO",
+      "프로야구",
+      "선발투수",
+      "선발 투수",
+      "타자",
+      "투수",
+      "포수",
+      "홈런",
+      "타율",
+      "1군",
+      "2군",
+      "구단",
+      "야구장"
+    ]
+  },
+  {
+    "code": "001680",
+    "name": "대상",
+    "aliases": ["대상㈜", "대상그룹", "Daesang"],
+    "former_names": ["미원"],
+    "affiliates": ["대상홀딩스", "대상베스트코"],
+    "exclude_terms": [
+      "지원대상",
+      "적용대상",
+      "이벤트대상",
+      "대상포진",
+      "조사대상",
+      "심사대상",
+      "혜택대상",
+      "수상대상",
+      "시상식 대상",
+      "대상으로",
+      "대상자"
+    ]
+  },
+  {
+    "code": "005380",
+    "name": "현대차",
+    "aliases": ["현대자동차", "Hyundai Motor", "HMC"],
+    "former_names": [],
+    "affiliates": ["현대모비스", "현대제철", "기아"],
+    "exclude_terms": []
+  },
+  {
+    "code": "000660",
+    "name": "SK하이닉스",
+    "aliases": ["SK Hynix", "하이닉스"],
+    "former_names": ["현대전자산업"],
+    "affiliates": ["SK텔레콤", "SK이노베이션"],
+    "exclude_terms": []
+  },
+  {
+    "code": "035420",
+    "name": "NAVER",
+    "aliases": ["네이버", "NAVER Corp"],
+    "former_names": ["NHN"],
+    "affiliates": ["네이버웹툰", "라인", "스노우"],
+    "exclude_terms": []
+  },
+  {
+    "code": "035720",
+    "name": "카카오",
+    "aliases": ["Kakao", "Kakao Corp"],
+    "former_names": ["다음카카오", "아이위랩"],
+    "affiliates": ["카카오뱅크", "카카오페이", "카카오모빌리티", "카카오게임즈", "카카오톡", "카카오맵", "카카오택시"],
+    "exclude_terms": []
+  },
+  {
+    "code": "051910",
+    "name": "LG화학",
+    "aliases": ["LG Chem"],
+    "former_names": ["럭키금성화학"],
+    "affiliates": ["LG에너지솔루션", "LG생활건강"],
+    "exclude_terms": []
+  },
+  {
+    "code": "207940",
+    "name": "삼성바이오로직스",
+    "aliases": ["Samsung Biologics", "삼성바이오"],
+    "former_names": [],
+    "affiliates": ["삼성바이오에피스"],
+    "exclude_terms": []
+  },
+  {
+    "code": "003550",
+    "name": "LG",
+    "aliases": ["LG그룹", "㈜LG", "LG Corp"],
+    "former_names": ["럭키금성"],
+    "affiliates": ["LG전자", "LG화학", "LG유플러스", "LG디스플레이", "LG생활건강"],
+    "exclude_terms": [
+      "LG 트윈스",
+      "LG트윈스",
+      "트윈스",
+      "KBO",
+      "프로야구",
+      "선발투수",
+      "선발 투수",
+      "타자",
+      "투수",
+      "포수",
+      "홈런",
+      "타율",
+      "1군",
+      "2군",
+      "구단",
+      "야구장",
+      "LG배",
+      "기왕전",
+      "바둑"
+    ]
+  }
+]

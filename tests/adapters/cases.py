@@ -15,6 +15,7 @@ from typing import Literal
 from app.gateway.adapters.dart import DartAdapter
 from app.gateway.adapters.kiwoom import KiwoomAdapter
 from app.gateway.adapters.mock import MockAdapter
+from app.gateway.adapters.naver import NaverAdapter
 from app.gateway.protocols import ProviderAdapter
 from app.schemas.frozen import Query, ReasonCode
 from providers.dart.corp_code import DartCorpCodeResolver
@@ -180,6 +181,21 @@ def _real_adapter_cases() -> tuple[AdapterContractCase, ...]:
         params={"stock_code": "005930"},
         created_at=collected_at,
     )
+    naver_query = Query(
+        query_id="01K5ZTQ9X7WPCVN2M4H8JRAC3D",
+        scope="stock",
+        intent="context",
+        provider="naver",
+        endpoint="news_search",
+        params={
+            "stock_code": "005930",
+            "stock_name": "삼성전자",
+            "query": "005930",
+            "display": 30,
+            "sort": "date",
+        },
+        created_at=collected_at,
+    )
     return (
         AdapterContractCase(
             case_id="real-dart-financial",
@@ -231,6 +247,36 @@ def _real_adapter_cases() -> tuple[AdapterContractCase, ...]:
             ),),
             fixture_paths=(FIXTURES / "kiwoom" / "metadata.json",),
         ),
+        AdapterContractCase(
+            case_id="real-naver-news-search",
+            adapter=NaverAdapter("test-placeholder", "test-placeholder"),
+            query=naver_query,
+            raw={
+                "_meta": {
+                    "http_status": 200,
+                    "headers": {},
+                    "request_query": "005930",
+                    "request_display": 30,
+                    "request_sort": "date",
+                },
+                "body": {
+                    "items": [{
+                        "title": "삼성전자, HBM4 공급 확대",
+                        "description": "삼성전자(005930)가 공급 확대 계획을 밝혔다.",
+                        "link": "https://n.news.naver.com/mnews/article/001/123",
+                        "originallink": "https://www.yna.co.kr/view/AKR123",
+                        "pubDate": "Wed, 12 Aug 2026 09:00:00 +0900",
+                    }]
+                },
+            },
+            collected_at=collected_at,
+            expectations=(DraftExpectation(
+                source_ref="naver:5eb22b58b49b8c5fa9de9011",
+                expected_span_scope="headline_snippet",
+                expects_normalized_value=False,
+            ),),
+            fixture_paths=(),
+        ),
     )
 
 
@@ -240,6 +286,7 @@ REAL_ADAPTER_CASES = _real_adapter_cases()
 def _real_error_cases() -> tuple[AdapterErrorCase, ...]:
     dart = REAL_ADAPTER_CASES[0].adapter
     kiwoom = REAL_ADAPTER_CASES[1].adapter
+    naver = next(case.adapter for case in REAL_ADAPTER_CASES if case.adapter.name == "naver")
     dart_values = (
         ("auth", "010", ReasonCode.AUTH_FAILED, False, False),
         ("ip", "012", ReasonCode.IP_MISMATCH, False, False),
@@ -281,6 +328,27 @@ def _real_error_cases() -> tuple[AdapterErrorCase, ...]:
         expected_retryable=retryable,
         hint_required=hint,
     ) for case_id, category, reason, retryable, hint in kiwoom_values)
+    naver_values = (
+        ("auth", 401, ReasonCode.AUTH_FAILED, False, False),
+        ("timeout", 408, ReasonCode.UPSTREAM_TIMEOUT, True, False),
+        ("rate", 429, ReasonCode.RATE_LIMIT, True, True),
+        ("upstream", 500, ReasonCode.UPSTREAM_5XX, True, False),
+        ("schema", 400, ReasonCode.SCHEMA_INVALID, False, False),
+    )
+    cases.extend(AdapterErrorCase(
+        case_id=f"real-naver-{case_id}",
+        adapter=naver,
+        raw={
+            "_meta": {
+                "http_status": status,
+                "headers": {"retry-after": "1"} if hint else {},
+            },
+            "body": {},
+        },
+        expected_reason_code=reason,
+        expected_retryable=retryable,
+        hint_required=hint,
+    ) for case_id, status, reason, retryable, hint in naver_values)
     return tuple(cases)
 
 

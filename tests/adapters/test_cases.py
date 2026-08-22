@@ -21,8 +21,12 @@ def test_registered_cases_are_valid():
     assert {case.adapter.name for case in ALL_ADAPTER_CASES} == {"dart", "naver", "kiwoom"}
 
 
-def test_real_registry는_검증된_DART와_Kiwoom만_포함한다():
-    assert {case.adapter.name for case in REAL_ADAPTER_CASES} == {"dart", "kiwoom"}
+def test_real_registry는_세_실제_Provider를_포함한다():
+    assert {case.adapter.name for case in REAL_ADAPTER_CASES} == {
+        "dart",
+        "naver",
+        "kiwoom",
+    }
     validate_registry(CONTRACT_ADAPTER_CASES, CONTRACT_ERROR_CASES)
 
 

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 
+import httpx
 import pytest
 
 import app.orchestration.graph as graph_module
 from app.contexts.views import IntegrationView
+from app.gateway.adapters.naver import NaverAdapter
+from app.gateway.admission import ProviderAdmissionController
 from app.orchestration.drafts import FindingDraft
 from app.orchestration.nodes.s0 import make_nodes
 from app.schemas.frozen import (
@@ -78,7 +82,7 @@ def evidence(n: int) -> Evidence:
 async def seed_claims(runtime_deps, claims: list[Claim]) -> dict:
     await runtime_deps.review_store.put_claims("run-s0", claims)
     return initial_state() | {
-        "stock": {"code": "005930"},
+        "stock": {"code": "005930", "name": "삼성전자"},
         "claim_ids": [item.claim_id for item in claims],
     }
 
@@ -137,7 +141,12 @@ async def test_n5_filters_canonical_non_verifiable_claims_before_query_construct
     queries = await runtime_deps.evidence_store.get_queries(patch["query_ids"])
 
     assert [item.claim_id for item in queries] == [a.claim_id, c.claim_id]
-    assert all(item.provider == "dart" and item.params == {"stock_code": "005930"} for item in queries)
+    assert all(
+        item.provider == "dart"
+        and item.endpoint == "disclosure_list"
+        and item.params == {"stock_code": "005930"}
+        for item in queries
+    )
     assert "NON_VERIFIABLE_SECRET" not in str([item.model_dump() for item in queries])
     assert await runtime_deps.review_store.get_claims(state["claim_ids"]) == before
     assert patch["node_results"] == ["n5:ok"]
@@ -156,6 +165,71 @@ async def test_n5_same_slot_verifiable_claims는_각각_독립_Query를_만든�
 
     assert [item.claim_id for item in queries] == [demand.claim_id, supply.claim_id]
     assert len({item.query_id for item in queries}) == 2
+
+
+@pytest.mark.asyncio
+async def test_n5_claim_dependent_text_slot은_NAVER_Query로_계획한다():
+    runtime_deps = deps()
+    item = claim(1, verifiable=True, slot_id=4, proposition="HBM 공급 확대")
+    state = await seed_claims(runtime_deps, [item])
+
+    patch = await make_nodes(runtime_deps)["n5"](state)
+    queries = await runtime_deps.evidence_store.get_queries(patch["query_ids"])
+
+    assert len(queries) == 1
+    assert queries[0].provider == "naver"
+    assert queries[0].endpoint == "news_search"
+    assert queries[0].params == {
+        "stock_code": "005930",
+        "stock_name": "삼성전자",
+        "query": "005930",
+        "display": 30,
+        "sort": "date",
+    }
+
+
+@pytest.mark.asyncio
+async def test_n5_NAVER_Query는_Gateway에서_canonical_Evidence로_연결된다():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "items": [{
+                    "title": "삼성전자, HBM 공급 확대",
+                    "description": "삼성전자(005930)가 신규 공급 계획을 발표했다.",
+                    "link": "https://n.news.naver.com/mnews/article/001/999",
+                    "originallink": "https://example.com/news/999",
+                    "pubDate": "Fri, 21 Aug 2026 09:00:00 +0900",
+                }]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        adapter = NaverAdapter("test-placeholder", "test-placeholder", client=client)
+        runtime_deps = replace(
+            deps(),
+            adapters={"naver": adapter},
+            provider_admission=ProviderAdmissionController({"naver": 3}),
+        )
+        item = claim(1, verifiable=True, slot_id=4, proposition="HBM 공급 확대")
+        state = await seed_claims(runtime_deps, [item])
+        n5_patch = await make_nodes(runtime_deps)["n5"](state)
+        state["query_ids"] = n5_patch["query_ids"]
+
+        n6_patch = await make_nodes(runtime_deps)["n6"](state)
+        evidence_ids = await runtime_deps.evidence_store.evidence_ids_for_queries(
+            state["query_ids"]
+        )
+
+        assert n6_patch["node_results"] == ["n6:ok"]
+        assert n6_patch["counters"] == {"external_calls": 1}
+        assert len(evidence_ids) == 1
+        stored = await runtime_deps.evidence_store.get_many(evidence_ids)
+        assert stored[0].source_type == "news"
+    finally:
+        await client.aclose()
 
 
 @pytest.mark.asyncio

@@ -222,10 +222,12 @@ def deps(gateway=None, resolver=None):
     return RuntimeDeps(
         review_store=MemoryReviewStore(),
         evidence_store=MemoryEvidenceStore(),
-        provider_admission=ProviderAdmissionController({"dart": 3, "kiwoom": 1}),
+        provider_admission=ProviderAdmissionController(
+            {"dart": 3, "naver": 3, "kiwoom": 1}
+        ),
         model_gateway=gateway,
         stock_resolver=resolver,
-        adapters={"dart": MockAdapter("dart")},
+        adapters={"dart": MockAdapter("dart"), "naver": MockAdapter("naver")},
         clock=lambda: NOW,
         id_factory=Ids(),
         render_candidates=RenderCandidateStore(),
