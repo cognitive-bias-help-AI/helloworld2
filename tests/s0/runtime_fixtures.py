@@ -71,7 +71,9 @@ class FlowGateway:
                         slot_id=1,
                         user_text_span=RAW,
                         span_offset=(0, len(RAW)),
-                        normalized_proposition="영업이익 증가",
+                        normalized_proposition=(
+                            "2025 사업보고서 연결 영업이익이 증가했다"
+                        ),
                         verifiable=True,
                     )
                 ]
@@ -94,7 +96,11 @@ class FlowGateway:
                 slot_id=locked or 4,
                 text_span=segment.text,
                 span_offset=(0, len(segment.text)),
-                normalized_proposition=("영업이익 증가" if locked is None else None),
+                normalized_proposition=(
+                    "2025 사업보고서 연결 영업이익이 증가했다"
+                    if locked is None
+                    else None
+                ),
                 proposed_value=proposed_value,
                 semantic_kind=semantic_kind,
             )])

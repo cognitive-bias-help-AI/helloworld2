@@ -131,9 +131,9 @@ async def seed_queries_and_evidence(runtime_deps, pairs):
 @pytest.mark.asyncio
 async def test_n5_filters_canonical_non_verifiable_claims_before_query_construction():
     runtime_deps = deps()
-    a = claim(1, verifiable=True)
+    a = claim(1, verifiable=True, proposition="유상증자 공시가 발표됐다")
     b = claim(2, verifiable=False, proposition="NON_VERIFIABLE_SECRET")
-    c = claim(3, verifiable=True)
+    c = claim(3, verifiable=True, proposition="신규사업 공시가 발표됐다")
     state = await seed_claims(runtime_deps, [a, b, c])
     before = copy.deepcopy(await runtime_deps.review_store.get_claims(state["claim_ids"]))
 
@@ -156,8 +156,8 @@ async def test_n5_filters_canonical_non_verifiable_claims_before_query_construct
 @pytest.mark.asyncio
 async def test_n5_same_slot_verifiable_claims는_각각_독립_Query를_만든다():
     runtime_deps = deps()
-    demand = claim(1, verifiable=True, slot_id=4, proposition="HBM 수요 증가")
-    supply = claim(2, verifiable=True, slot_id=4, proposition="HBM 공급 부족")
+    demand = claim(1, verifiable=True, slot_id=4, proposition="HBM 수요 증가 뉴스")
+    supply = claim(2, verifiable=True, slot_id=4, proposition="HBM 공급 부족 뉴스")
     state = await seed_claims(runtime_deps, [demand, supply])
 
     patch = await make_nodes(runtime_deps)["n5"](state)
@@ -170,7 +170,7 @@ async def test_n5_same_slot_verifiable_claims는_각각_독립_Query를_만든�
 @pytest.mark.asyncio
 async def test_n5_claim_dependent_text_slot은_NAVER_Query로_계획한다():
     runtime_deps = deps()
-    item = claim(1, verifiable=True, slot_id=4, proposition="HBM 공급 확대")
+    item = claim(1, verifiable=True, slot_id=4, proposition="HBM 공급 확대 뉴스")
     state = await seed_claims(runtime_deps, [item])
 
     patch = await make_nodes(runtime_deps)["n5"](state)
@@ -213,7 +213,7 @@ async def test_n5_NAVER_Query는_Gateway에서_canonical_Evidence로_연결된�
             adapters={"naver": adapter},
             provider_admission=ProviderAdmissionController({"naver": 3}),
         )
-        item = claim(1, verifiable=True, slot_id=4, proposition="HBM 공급 확대")
+        item = claim(1, verifiable=True, slot_id=4, proposition="HBM 공급 확대 뉴스")
         state = await seed_claims(runtime_deps, [item])
         n5_patch = await make_nodes(runtime_deps)["n5"](state)
         state["query_ids"] = n5_patch["query_ids"]
@@ -237,6 +237,18 @@ async def test_n5_all_false_returns_empty_query_ids_without_provider_candidate()
     runtime_deps = deps()
     claims = [claim(1, verifiable=False), claim(2, verifiable=False)]
     state = await seed_claims(runtime_deps, claims)
+
+    patch = await make_nodes(runtime_deps)["n5"](state)
+
+    assert patch == {"query_ids": [], "node_results": ["n5:ok"]}
+    assert runtime_deps.evidence_store._queries == {}
+
+
+@pytest.mark.asyncio
+async def test_n5_unknown_evidence_need는_provider를_추측하지_않는다():
+    runtime_deps = deps()
+    item = claim(1, verifiable=True, proposition="HBM 전망이 좋다")
+    state = await seed_claims(runtime_deps, [item])
 
     patch = await make_nodes(runtime_deps)["n5"](state)
 

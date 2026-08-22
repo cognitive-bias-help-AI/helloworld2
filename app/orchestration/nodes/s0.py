@@ -31,6 +31,7 @@ from app.contexts.views import (
     SlotTextView,
     VerifyPacket,
 )
+from app.domain.evidence_need import EvidenceNeed, classify_evidence_need
 from app.domain.intake import (
     FreeTextInput,
     HybridIntake,
@@ -40,7 +41,7 @@ from app.domain.intake import (
 )
 from app.domain.routing import RoutingOutcome
 from app.domain.semantic_source import SEMANTIC_PROJECTION_VERSION
-from app.domain.slots import EvidencePolicy, get_slot_definition
+from app.domain.slots import get_slot_definition
 from app.domain.stock_scope import evaluate_stock_scope
 from app.domain.text_safety import sanitize_user_text
 from app.gateway.evidence_gateway import GatewayBudgetExceeded, collect_evidence
@@ -50,6 +51,7 @@ from app.orchestration.drafts import (
     GuardVerdictDraft,
     RenderDraft,
 )
+from app.orchestration.evidence_planning import plan_claim_queries
 from app.orchestration.hitl import StockChoiceRequest, StockChoiceResume, select_stock
 from app.orchestration.intake_review_runtime import (
     HitlResumeEvent,
@@ -77,7 +79,6 @@ from app.schemas.frozen import (
     SourceTrace,
     StockCandidate,
 )
-from providers.naver.query import build_query_params
 
 
 def _sanitize_intake(intake: HybridIntake) -> HybridIntake:
@@ -443,7 +444,11 @@ def make_nodes(deps: RuntimeDeps):
                 ]
             }
         stock = state.get("stock")
-        if not isinstance(stock, dict) or not isinstance(stock.get("code"), str):
+        if (
+            not isinstance(stock, dict)
+            or not isinstance(stock.get("code"), str)
+            or not isinstance(stock.get("name"), str)
+        ):
             return {
                 "node_results": [
                     f"n5:block:{ReasonCode.CONTRACT_VIOLATION.value}"
@@ -451,48 +456,14 @@ def make_nodes(deps: RuntimeDeps):
             }
         queries: list[Query] = []
         for claim in claims:
-            if not claim.verifiable:
-                continue
-            policy = get_slot_definition(claim.slot_id).evidence_policy
-            if policy in {
-                EvidencePolicy.CLAIM_DEPENDENT,
-                EvidencePolicy.SYSTEM_OPPOSING_SEARCH,
-            }:
-                stock_name = stock.get("name")
-                if not isinstance(stock_name, str) or not stock_name.strip():
-                    return {
-                        "node_results": [
-                            f"n5:block:{ReasonCode.CONTRACT_VIOLATION.value}"
-                        ]
-                    }
-                for params in build_query_params(stock["code"], stock_name):
-                    queries.append(
-                        Query(
-                            query_id=deps.id_factory(),
-                            scope="claim",
-                            claim_id=claim.claim_id,
-                            intent=(
-                                "counter"
-                                if policy is EvidencePolicy.SYSTEM_OPPOSING_SEARCH
-                                else "verify"
-                            ),
-                            provider="naver",
-                            endpoint="news_search",
-                            params=params,
-                            created_at=deps.clock(),
-                        )
-                    )
-                continue
-            queries.append(
-                Query(
-                    query_id=deps.id_factory(),
-                    scope="claim",
-                    claim_id=claim.claim_id,
-                    intent="verify",
-                    provider="dart",
-                    endpoint="disclosure_list",
-                    params={"stock_code": stock["code"]},
-                    created_at=deps.clock(),
+            queries.extend(
+                plan_claim_queries(
+                    claim,
+                    stock_code=stock["code"],
+                    stock_name=stock["name"],
+                    as_of=datetime.fromisoformat(state["as_of"]),
+                    id_factory=deps.id_factory,
+                    clock=deps.clock,
                 )
             )
         ids = await deps.evidence_store.put_queries(state["run_id"], queries)
@@ -692,15 +663,19 @@ def make_nodes(deps: RuntimeDeps):
         }
         deterministic_drafts = []
         evidence_backed = []
+        unknown_need_claim_ids: set[str] = set()
         for claim in claims:
             if not claim.verifiable:
                 continue
             if claim.claim_id not in queried_claim_ids:
-                return {
-                    "node_results": [
-                        f"n9:block:{ReasonCode.CONTRACT_VIOLATION.value}"
-                    ]
-                }
+                if classify_evidence_need(claim) is EvidenceNeed.UNKNOWN:
+                    unknown_need_claim_ids.add(claim.claim_id)
+                else:
+                    return {
+                        "node_results": [
+                            f"n9:block:{ReasonCode.CONTRACT_VIOLATION.value}"
+                        ]
+                    }
             evaluation = evaluations_by_claim.get(claim.claim_id)
             if evaluation is None:
                 return {
@@ -739,7 +714,9 @@ def make_nodes(deps: RuntimeDeps):
                 "finding_ids": stored_ids,
                 "oppose": view.oppose.model_dump(),
                 "node_results": [
-                    f"n9:block:{ReasonCode.EVIDENCE_INSUFFICIENT.value}"
+                    "n9:partial"
+                    if unknown_need_claim_ids and not queries
+                    else f"n9:block:{ReasonCode.EVIDENCE_INSUFFICIENT.value}"
                 ],
             }
         drafts = None
