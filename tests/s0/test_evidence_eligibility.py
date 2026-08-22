@@ -13,8 +13,11 @@ from app.gateway.admission import ProviderAdmissionController
 from app.orchestration.drafts import FindingDraft
 from app.orchestration.nodes.s0 import make_nodes
 from app.schemas.frozen import (
+    CitationRef,
     Claim,
     ClaimEvaluationDraft,
+    ClaimEvidenceDraft,
+    ClaimStanceDraft,
     Evidence,
     EvidenceQueryLink,
     ProviderCall,
@@ -422,6 +425,134 @@ async def test_n7_skips_non_verifiable_and_no_evidence_without_counter_patch():
     assert runtime_deps.model_gateway.calls == []
     assert await runtime_deps.review_store.get_claim_evidence("run-s0", a.claim_id) == []
     assert await runtime_deps.review_store.get_claim_evidence("run-s0", b.claim_id) == []
+
+
+class CounterStanceGateway(FlowGateway):
+    def __init__(self, stance: str):
+        super().__init__()
+        self.stance = stance
+
+    async def invoke(self, slot, prompt_version, input_view, output_schema):
+        if output_schema is ClaimStanceDraft:
+            self.calls.append(("n7", input_view))
+            return ClaimStanceDraft(
+                stances=[
+                    ClaimEvidenceDraft(evidence_id=item.evidence_id, stance=self.stance)
+                    for item in input_view.evidence
+                ]
+            ), Usage(model_slot=slot, prompt_tokens=0, output_tokens=0, ctx_chars=1)
+        if output_schema is ClaimEvaluationDraft:
+            self.calls.append(("n8", input_view))
+            evidence_ids = [item.evidence_id for item in input_view.evidence]
+            buckets = {
+                "support_evidence_ids": evidence_ids if self.stance == "support" else [],
+                "oppose_evidence_ids": evidence_ids if self.stance == "oppose" else [],
+                "neutral_evidence_ids": evidence_ids if self.stance == "neutral" else [],
+                "unknown_evidence_ids": evidence_ids if self.stance == "unknown" else [],
+            }
+            return ClaimEvaluationDraft(
+                citations=[
+                    CitationRef(evidence_id=evidence_ids[0], span=input_view.evidence[0].raw_span)
+                ],
+                verdict={"support": "support", "oppose": "contradicted"}.get(
+                    self.stance, "unverifiable"
+                ),
+                missing_dimensions=[],
+                uncertainty_codes=[],
+                **buckets,
+            ), Usage(model_slot=slot, prompt_tokens=0, output_tokens=0, ctx_chars=1)
+        return await super().invoke(slot, prompt_version, input_view, output_schema)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stance, expected_count", [("oppose", 1), ("support", 0)])
+async def test_counter_query_intent_does_not_force_stance_and_n9_uses_runtime_lineage(
+    stance, expected_count
+):
+    runtime_deps = deps(gateway=CounterStanceGateway(stance))
+    item = claim(11, verifiable=True, slot_id=7, proposition="HBM 전망의 반대 근거")
+    state = await seed_claims(runtime_deps, [item])
+    counter = query(11, item.claim_id, provider="naver").model_copy(
+        update={
+            "intent": "counter",
+            "endpoint": "news_search",
+            "params": {"query": "삼성전자 HBM", "stock_code": "005930"},
+        }
+    )
+    proof = evidence(11).model_copy(update={"source_type": "news"})
+    state["query_ids"] = await seed_queries_and_evidence(runtime_deps, [(item, counter, proof)])
+
+    n7_patch = await make_nodes(runtime_deps)["n7"](state)
+    stored_stance = await runtime_deps.review_store.get_claim_evidence("run-s0", item.claim_id)
+    assert stored_stance[0].stance == stance
+    state["node_results"] += n7_patch["node_results"]
+
+    n8_patch = await make_nodes(runtime_deps)["n8"](state)
+    state["claim_evaluation_ids"] = n8_patch["claim_evaluation_ids"]
+    evaluation = (
+        await runtime_deps.review_store.get_claim_evaluations(state["claim_evaluation_ids"])
+    )[0]
+    assert evaluation.oppose_evidence_ids == ([proof.evidence_id] if stance == "oppose" else [])
+
+    n9_patch = await make_nodes(runtime_deps)["n9"](state)
+    assert n9_patch["oppose"] == {
+        "status": "verified",
+        "count": expected_count,
+        "queries": ["삼성전자 HBM"],
+        "reason": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_counter_news_network_free_vertical_reaches_verified_oppose_block():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "items": [
+                    {
+                        "title": "HBM 수요 둔화 우려",
+                        "description": "삼성전자 HBM 수요가 둔화할 수 있다는 전망이다.",
+                        "link": "https://n.news.naver.com/mnews/article/001/777",
+                        "originallink": "https://example.com/news/777",
+                        "pubDate": "Sat, 22 Aug 2026 09:00:00 +0900",
+                    }
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        runtime_deps = replace(
+            deps(gateway=CounterStanceGateway("oppose")),
+            adapters={"naver": NaverAdapter("id", "secret", client=client)},
+            provider_admission=ProviderAdmissionController({"naver": 3}),
+        )
+        item = claim(21, verifiable=True, slot_id=7, proposition="HBM 수요 둔화 뉴스")
+        state = await seed_claims(runtime_deps, [item])
+
+        n5_patch = await make_nodes(runtime_deps)["n5"](state)
+        state["query_ids"] = n5_patch["query_ids"]
+        planned = await runtime_deps.evidence_store.get_queries(state["query_ids"])
+        assert planned[0].intent == "counter"
+
+        n6_patch = await make_nodes(runtime_deps)["n6"](state)
+        assert n6_patch["node_results"] == ["n6:ok"]
+        assert (
+            len(await runtime_deps.evidence_store.evidence_ids_for_queries(state["query_ids"])) == 1
+        )
+
+        await make_nodes(runtime_deps)["n7"](state)
+        n8_patch = await make_nodes(runtime_deps)["n8"](state)
+        state["claim_evaluation_ids"] = n8_patch["claim_evaluation_ids"]
+        n9_patch = await make_nodes(runtime_deps)["n9"](state)
+
+        assert n9_patch["oppose"]["status"] == "verified"
+        assert n9_patch["oppose"]["count"] == 1
+        assert n9_patch["oppose"]["queries"] == ["005930"]
+    finally:
+        await client.aclose()
 
 
 class EmptySafeGateway(FlowGateway):

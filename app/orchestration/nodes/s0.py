@@ -64,6 +64,7 @@ from app.orchestration.limits import (
     HITL_REASK_LIMIT,
     REWRITE_LIMIT,
 )
+from app.orchestration.opposing_search import build_oppose_block
 from app.orchestration.reporting import build_report_artifact
 from app.orchestration.runtime import ReviewRequestContext, RuntimeDeps
 from app.orchestration.state import ReviewState
@@ -73,7 +74,6 @@ from app.schemas.frozen import (
     ClaimStanceDraft,
     GuardInput,
     NodeStatus,
-    OpposeBlock,
     Query,
     ReasonCode,
     SourceTrace,
@@ -697,9 +697,33 @@ def make_nodes(deps: RuntimeDeps):
                         claim_evaluation_id=evaluation.claim_evaluation_id,
                     )
                 )
+        counter_queries = [query for query in queries if query.intent == "counter"]
+        provider_calls_by_query = {
+            query.query_id: await deps.evidence_store.provider_calls_for_query(
+                query.query_id
+            )
+            for query in counter_queries
+        }
+        evidence_ids_by_query = {
+            query.query_id: await deps.evidence_store.evidence_ids_for_queries(
+                [query.query_id]
+            )
+            for query in counter_queries
+        }
+        oppose_evidence_ids = {
+            evidence_id
+            for evaluation in evaluations
+            for evidence_id in evaluation.oppose_evidence_ids
+        }
+        oppose = build_oppose_block(
+            counter_queries=counter_queries,
+            provider_calls_by_query=provider_calls_by_query,
+            evidence_ids_by_query=evidence_ids_by_query,
+            oppose_evidence_ids=oppose_evidence_ids,
+        )
         view = IntegrationView(
             evaluations=evidence_backed,
-            oppose=OpposeBlock(status="verified", count=0, queries=["반대 근거 검색"]),
+            oppose=oppose,
             missing_slots=[],
         )
         if not evidence_backed:
