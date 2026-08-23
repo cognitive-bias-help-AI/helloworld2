@@ -885,7 +885,16 @@ async def test_n9_mixed_uses_llm_only_for_evidence_backed_and_builds_no_evidence
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", ["non_verifiable_only", "no_evidence_only"])
-async def test_n9_zero_evidence_backed_is_deterministic_terminal(case):
+async def test_n9_zero_evidence_backed_is_partial_not_blocked(case):
+    """근거 0건은 Report 를 없앨 이유가 아니라 Report 에 실을 결과다.
+
+    이전 계약은 여기서 block:evidence_insufficient 를 내고 n12 로 빠졌다.
+    그런데 Query 를 하나도 못 만든 경우에는 partial 로 보고서가 나왔기 때문에
+    "검색할 게 없으면 보고서가 나오고, 검색했는데 0건이면 안 나온다" 가 됐다.
+    뉴스 0건은 정상 상황이므로 두 경우 모두 partial 로 통일한다.
+
+    block 은 계약 위반과 안전 차단에만 남는다.
+    """
     runtime_deps = deps(gateway=EmptySafeGateway())
     item = claim(1, verifiable=case == "no_evidence_only", slot_id=2)
     state = await seed_claims(runtime_deps, [item])
@@ -897,7 +906,10 @@ async def test_n9_zero_evidence_backed_is_deterministic_terminal(case):
     patch = await make_nodes(runtime_deps)["n9"](state | n8_patch)
 
     findings = await runtime_deps.review_store.get_findings(patch["finding_ids"])
-    assert patch["node_results"] == ["n9:block:evidence_insufficient"]
+    assert patch["node_results"] == ["n9:partial"]
+    assert not any(":block:" in item for item in patch["node_results"]), (
+        "block 이 남으면 그래프가 n12 로 빠져 보고서가 나오지 않는다"
+    )
     assert "counters" not in patch
     assert [node for node, _ in runtime_deps.model_gateway.calls if node == "n9"] == []
     if case == "no_evidence_only":

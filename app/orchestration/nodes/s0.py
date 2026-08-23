@@ -51,6 +51,7 @@ from app.orchestration.drafts import (
     GuardVerdictDraft,
     RenderDraft,
 )
+from app.orchestration.evidence_packing import fits_budget, pack_evidence
 from app.orchestration.evidence_planning import plan_claim_queries
 from app.orchestration.hitl import StockChoiceRequest, StockChoiceResume, select_stock
 from app.orchestration.intake_review_runtime import (
@@ -539,27 +540,43 @@ def make_nodes(deps: RuntimeDeps):
             if set(query_ids_by_evidence) != set(evidence_ids):
                 raise RuntimeError(ReasonCode.CONTRACT_VIOLATION.value)
             evidence = await deps.evidence_store.get_many(evidence_ids)
-            view = EvidencePacket(
-                claim=ClaimView(
-                    claim_id=claim.claim_id,
-                    slot_id=claim.slot_id,
-                    normalized_proposition=claim.normalized_proposition,
-                ),
-                evidence=[
-                    EvidenceExcerptView(
-                        **item.model_dump(include=set(EvidenceExcerptView.model_fields))
-                    )
-                    for item in evidence
-                ],
+            claim_view = ClaimView(
+                claim_id=claim.claim_id,
+                slot_id=claim.slot_id,
+                normalized_proposition=claim.normalized_proposition,
             )
+
+            def _packet(items, claim_view=claim_view):
+                return EvidencePacket(
+                    claim=claim_view,
+                    evidence=[
+                        EvidenceExcerptView(
+                            **item.model_dump(include=set(EvidenceExcerptView.model_fields))
+                        )
+                        for item in items
+                    ],
+                )
+
+            evidence, dropped = pack_evidence(
+                evidence,
+                item_limit=NODE_BUDGETS["n7"].items,
+                fits=lambda items: fits_budget("n7", _packet(items)),
+            )
+            if dropped:
+                degraded = True
+            # 🔴 조립기는 packet 과 **정확히 같은** evidence 집합을 요구한다
+            #    (assemble_claim_evidence 의 coverage_mismatch / contract_violation).
+            #    잘라낸 뒤에는 커버리지 기준도 잘린 쪽으로 좁혀야 한다.
+            evidence_ids = [item.evidence_id for item in evidence]
+            view = _packet(evidence)
             draft = None
             mapping = {
                 evidence_id: (
-                    next(iter(linked_query_ids))
-                    if len(linked_query_ids) == 1
+                    next(iter(query_ids_by_evidence[evidence_id]))
+                    if len(query_ids_by_evidence[evidence_id]) == 1
                     else None
                 )
-                for evidence_id, linked_query_ids in query_ids_by_evidence.items()
+                for evidence_id in evidence_ids
             }
             for _ in range(2):
                 candidate, _ = await _invoke(deps, "n7", "SMALL", view, ClaimStanceDraft)
@@ -589,6 +606,7 @@ def make_nodes(deps: RuntimeDeps):
     async def n8(state: ReviewState):
         evaluations = []
         llm_calls = 0
+        truncated = False
         for claim in await canonical_claims(state["claim_ids"]):
             if not claim.verifiable:
                 continue
@@ -607,21 +625,49 @@ def make_nodes(deps: RuntimeDeps):
             evidence = await deps.evidence_store.get_many(evidence_ids)
             links = await deps.review_store.get_claim_evidence(state["run_id"], claim.claim_id)
             stance = {item.evidence_id: item.stance for item in links}
-            view = VerifyPacket(
-                claim=ClaimView(
-                    claim_id=claim.claim_id,
-                    slot_id=claim.slot_id,
-                    normalized_proposition=claim.normalized_proposition,
-                ),
-                evidence=[
-                    ClassifiedEvidenceView(
-                        **item.model_dump(include=set(EvidenceExcerptView.model_fields)),
-                        stance=stance[item.evidence_id],
+            # 🔴 n7 이 packet 을 잘랐으면 stance 가 없는 Evidence 가 남는다.
+            #    n8 은 **n7 이 실제로 분류한 것**만 평가한다. 이 필터가 없으면
+            #    아래 stance[...] 조회가 KeyError 로 run 을 끝낸다.
+            evidence = [item for item in evidence if item.evidence_id in stance]
+            if not evidence:
+                evaluations.append(
+                    assemble_unverifiable_evaluation_fallback(
+                        claim_id=claim.claim_id,
+                        packet_evidence_ids=[],
+                        numeric_checks=[],
+                        claim_evaluation_id=deps.id_factory(),
+                        created_at=deps.clock(),
                     )
-                    for item in evidence
-                ],
-                numeric_checks=[],
+                )
+                continue
+            claim_view = ClaimView(
+                claim_id=claim.claim_id,
+                slot_id=claim.slot_id,
+                normalized_proposition=claim.normalized_proposition,
             )
+
+            def _packet(items, claim_view=claim_view, stance=stance):
+                return VerifyPacket(
+                    claim=claim_view,
+                    evidence=[
+                        ClassifiedEvidenceView(
+                            **item.model_dump(include=set(EvidenceExcerptView.model_fields)),
+                            stance=stance[item.evidence_id],
+                        )
+                        for item in items
+                    ],
+                    numeric_checks=[],
+                )
+
+            evidence, dropped = pack_evidence(
+                evidence,
+                item_limit=NODE_BUDGETS["n8"].items,
+                fits=lambda items: fits_budget("n8", _packet(items)),
+            )
+            if dropped:
+                truncated = True
+            evidence_ids = [item.evidence_id for item in evidence]
+            view = _packet(evidence)
             assembled = None
             for _ in range(2):
                 candidate, _ = await _invoke(deps, "n8", "LARGE", view, ClaimEvaluationDraft)
@@ -644,7 +690,9 @@ def make_nodes(deps: RuntimeDeps):
                 )
             evaluations.append(assembled)
         ids = await deps.review_store.put_claim_evaluations(state["run_id"], evaluations)
-        degraded = any(
+        # packing 으로 잘린 것도 coverage 축소다. 모델이 스스로 신고하기를
+        # 기다리지 않고 노드가 아는 사실을 그대로 partial 로 올린다.
+        degraded = truncated or any(
             ReasonCode.COVERAGE_TRUNCATED in item.uncertainty_codes for item in evaluations
         )
         patch = {
@@ -770,14 +818,21 @@ def make_nodes(deps: RuntimeDeps):
             stored_ids = await deps.review_store.put_findings(
                 state["run_id"], findings
             )
+            # 🔴 근거 부족은 Report 를 없앨 이유가 아니라 **Report 에 실을 정보**다.
+            #
+            #    이전에는 Query 를 만들었는데 Evidence 가 0건이면
+            #    block:evidence_insufficient -> n12 로 빠져 보고서가 아예 안 나왔다.
+            #    그런데 Query 를 하나도 못 만든 경우(전부 UNKNOWN)에는 partial 로
+            #    보고서가 나왔다. "검색할 게 없으면 보고서가 나오고, 검색했는데
+            #    0건이면 안 나온다" 는 뒤집힌 결과였다.
+            #
+            #    뉴스 0건은 데모에서도 흔하다. "확인했으나 근거를 찾지 못했다" 는
+            #    사용자에게 전달할 가치가 있는 결과이므로 partial 로 내보낸다.
+            #    계약 위반과 안전 차단은 위쪽 분기에서 그대로 block 으로 남는다.
             return {
                 "finding_ids": stored_ids,
                 "oppose": view.oppose.model_dump(),
-                "node_results": [
-                    "n9:partial"
-                    if unknown_need_claim_ids and not queries
-                    else f"n9:block:{ReasonCode.EVIDENCE_INSUFFICIENT.value}"
-                ],
+                "node_results": ["n9:partial"],
             }
         drafts = None
         for _ in range(2):
@@ -893,34 +948,40 @@ def make_nodes(deps: RuntimeDeps):
             *build_review_slot_views(findings, evaluations),
             *build_slot_projection_review_views(projections),
         ]
-        view = RenderView(
-            slots=(
-                review_slots
-                if review_slots
-                else [
-                    SlotTextView(
-                        slot_no=1,
-                        text="검증 결과",
-                        quoted=False,
-                        citations=[],
+        # 🔴 n11 도 예산을 넘는다. citations 는 Evidence 전량이고 raw_span 이
+        #    최대 500자라, 근거 8건이면 n11 상한(3,500자)을 넘긴다.
+        #    slots 도 finding 수만큼 늘어나 item 상한(8)을 넘길 수 있다.
+        fallback_slots = [
+            SlotTextView(slot_no=1, text="검증 결과", quoted=False, citations=[])
+        ]
+        packed_slots = (review_slots or fallback_slots)[: NODE_BUDGETS["n11"].items]
+        locally_truncated = len(packed_slots) < len(review_slots)
+
+        def _render(items, slots=packed_slots, feedback=feedback, truncated=False):
+            return RenderView(
+                slots=slots,
+                banners=["COVERAGE_TRUNCATED"]
+                if truncated or any("partial" in x for x in state["node_results"])
+                else [],
+                theory_notes=[],
+                citations=[
+                    RenderCitationView(
+                        evidence_id=x.evidence_id,
+                        span=x.raw_span,
+                        source_url=x.source_url,
+                        publisher=x.publisher,
                     )
-                ]
-            ),
-            banners=["COVERAGE_TRUNCATED"]
-            if any("partial" in x for x in state["node_results"])
-            else [],
-            theory_notes=[],
-            citations=[
-                RenderCitationView(
-                    evidence_id=x.evidence_id,
-                    span=x.raw_span,
-                    source_url=x.source_url,
-                    publisher=x.publisher,
-                )
-                for x in evidence
-            ],
-            guard_feedback=feedback,
+                    for x in items
+                ],
+                guard_feedback=feedback,
+            )
+
+        evidence, dropped = pack_evidence(
+            evidence,
+            item_limit=None,
+            fits=lambda items: fits_budget("n11", _render(items)),
         )
+        view = _render(evidence, truncated=locally_truncated or bool(dropped))
         draft, _ = await _invoke(deps, "n11", "MID", view, RenderDraft)
         validate_citations(
             [c for slot in draft.slots for c in slot.citations],

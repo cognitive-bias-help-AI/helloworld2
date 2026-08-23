@@ -100,6 +100,17 @@ def build_review_slot_views(
         (7, "unverified"): "반대 방향 근거 검증이 완료되지 않았습니다.",
         (8, "missing"): "현재 판단을 다시 검토할 조건이 명확하지 않습니다.",
     }
+    # Slot 별 문구가 없을 때 kind 로 한 번 더 받는다.
+    #
+    # 근거 0건에도 Report 를 내보내기로 하면서 slot 4·5 의 unverified Finding 이
+    # 실제로 렌더링되기 시작했다. 그때 기본 문구("확인된 근거와 사용자 입력을
+    # 함께 다시 점검")가 나가면 **확인된 근거가 있는 것처럼 읽힌다.**
+    # 확인하지 못한 것을 확인한 것처럼 쓰지 않는 것이 이 시스템의 요점이다.
+    by_kind = {
+        "unverified": "이 부분은 현재 확인되지 않았습니다.",
+        "missing": "판단에 필요한 내용이 확인되지 않았습니다.",
+        "conflict": "입력하신 내용 안에 서로 다른 부분이 있어 하나로 확정하기 어렵습니다.",
+    }
     views = []
     for finding in sorted(
             findings,
@@ -124,7 +135,10 @@ def build_review_slot_views(
             if is_counter_mismatch
             else messages.get(
                 (finding.slot_id, finding.kind),
-                "현재 확인된 근거와 사용자 입력을 함께 다시 점검할 필요가 있습니다.",
+                by_kind.get(
+                    finding.kind,
+                    "현재 확인된 근거와 사용자 입력을 함께 다시 점검할 필요가 있습니다.",
+                ),
             )
         )
         views.append(
