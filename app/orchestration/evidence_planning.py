@@ -1,117 +1,309 @@
-"""Translate a classified EvidenceNeed into frozen Query objects."""
+"""Query Specification — 호출에 필요한 값이 충분한지 판정하고 Query를 만든다.
+
+🔴 B1 — EvidenceNeed(의미)와 분리된 두 번째 단계다.
+
+    evidence_need.py       무슨 종류의 근거가 필요한가
+    이 파일                 실제로 호출할 수 있는가
+
+■ 사용자 사실 vs 조회 정책 — 이 구분이 이 파일의 전부다
+
+fail-closed 는 "사용자가 모든 API 파라미터를 직접 말해야 한다" 는 뜻이 아니다.
+두 가지를 구분한다.
+
+  ● 사용자 사실 (User fact) — 없으면 **조회하지 않는다**
+    틀리면 주장의 의미가 달라지는 값. 사업연도가 대표적이다.
+    "2024년 영업이익" 과 "2025년 영업이익" 은 다른 주장이므로 시스템이
+    연도를 골라주면 사용자가 하지 않은 주장을 검증하게 된다.
+
+  ● 조회 정책 (Retrieval policy) — 시스템이 정한다
+    무엇을 검증할지가 아니라 **어떻게 가져올지**에 관한 값.
+    수정주가 여부, 수급 단위, 연결/별도 기본값이 여기에 속한다.
+    사용자에게 "수정주가 기준인가요?" 를 매번 되묻는 것은 되묻기 예산만
+    쓰고 판단을 바꾸지 못한다.
+
+정책으로 채운 값은 `Query.params` 에 그대로 남으므로 사후 추적이 된다.
+"어떤 기준으로 조회했는가" 는 params 를 보면 답할 수 있다.
+
+■ 부족하면 조용히 사라지지 않는다
+
+`missing_parameters()` 가 무엇이 없어서 조회하지 못했는지 이름으로 돌려준다.
+n9 는 이것을 보고 "계약 위반(계획했어야 하는데 안 함)" 과 "정당한 미계획"을
+구분한다. 이전에는 둘 다 UNKNOWN 이라 구분이 불가능했다.
+"""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Final
 
-from app.domain.evidence_need import EvidenceNeed, classify_evidence_need
+from app.domain.evidence_need import (
+    ACCOUNT_TERMS,
+    INDICATOR_FAMILIES,
+    EvidenceNeed,
+    classify_evidence_need,
+    contains_any,
+)
 from app.domain.slots import EvidencePolicy, get_slot_definition
 from app.schemas.frozen import Claim, Query
 from providers.naver.query import build_query_params
 
-_YEAR = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
-_REPORT_CODES = {
+_YEAR: Final = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
+
+_REPORT_CODES: Final[dict[str, str]] = {
     "사업보고서": "11011",
     "반기보고서": "11012",
     "1분기": "11013",
     "3분기": "11014",
 }
-_ACCOUNT_NAMES = ("매출액", "영업이익", "당기순이익")
-_INDICATOR_FAMILIES = {
-    "수익성": "profitability",
-    "안정성": "stability",
-    "성장성": "growth",
-    "활동성": "activity",
+_FS_DIV: Final[dict[str, str]] = {"연결": "CFS", "별도": "OFS"}
+_MEASURES: Final[dict[str, str]] = {"수량": "quantity", "금액": "amount"}
+_UNITS: Final[dict[str, str]] = {
+    "주 단위": "shares",
+    "천주": "thousand_shares",
+    "백만원": "million_krw",
+}
+_VALID_FLOW_UNITS: Final[frozenset[tuple[str, str]]] = frozenset(
+    {("quantity", "shares"), ("quantity", "thousand_shares"), ("amount", "million_krw")}
+)
+_UNIT_MEASURE: Final[dict[str, str]] = {
+    "shares": "quantity",
+    "thousand_shares": "quantity",
+    "million_krw": "amount",
+}
+_INDICATOR_FAMILY_BY_TERM: Final[dict[str, str]] = {
+    "ROE": "profitability",
+    "ROA": "profitability",
+    "부채비율": "stability",
+    "회전율": "activity",
 }
 
-
-def _single_match(text: str, values: dict[str, str]) -> str:
-    matched = [mapped for token, mapped in values.items() if token in text]
-    if len(matched) != 1:
-        raise ValueError("evidence planning requires exactly one explicit parameter")
-    return matched[0]
-
-
-def _year(text: str) -> str:
-    values = _YEAR.findall(text)
-    if len(set(values)) != 1:
-        raise ValueError("evidence planning requires exactly one business year")
-    return values[0]
+# ── 조회 정책 기본값 ──────────────────────────────────────────────
+#
+# 값을 여기 모아 두는 이유: "왜 연결 기준으로 조회했나" 를 물었을 때
+# 코드 여러 곳을 뒤지지 않고 이 표만 보면 되게 하기 위해서다.
+POLICY_REPORT_CODE: Final = "11011"   # 사업보고서 — 연간 확정치가 기준값이다
+POLICY_FS_DIV: Final = "CFS"          # 연결 — 그룹 실적의 표준 표시
+POLICY_MEASURE: Final = "amount"      # 수급은 금액 기준이 통용된다
+POLICY_UNIT: Final = "million_krw"
+POLICY_ADJUSTED_PRICE: Final = True   # 수정주가 — 액면분할 전후를 잇는다
 
 
-def _provider_params(
+@dataclass(frozen=True)
+class ParameterResolution:
+    """조회 계획과, 그것을 못 세운 이유."""
+
+    planned: tuple[tuple[str, str, dict[str, object]], ...] = ()
+    missing: tuple[str, ...] = ()
+    policy_applied: tuple[str, ...] = ()
+
+    @property
+    def ready(self) -> bool:
+        return bool(self.planned) and not self.missing
+
+
+def _single(text: str, options: dict[str, str]) -> tuple[str | None, bool]:
+    """정확히 하나만 언급됐을 때 그 값을. 둘 이상이면 모호로 표시한다."""
+    matched = list(dict.fromkeys(value for token, value in options.items() if token in text))
+    if len(matched) == 1:
+        return matched[0], False
+    return None, len(matched) > 1
+
+
+def _year(text: str) -> tuple[str | None, bool]:
+    values = sorted(set(_YEAR.findall(text)))
+    if len(values) == 1:
+        return values[0], False
+    return None, len(values) > 1
+
+
+def _trade_kind(text: str) -> tuple[str | None, bool]:
+    """'순매수' 는 '매수' 를 포함하므로 먼저 걷어내고 본다."""
+    if "순매수" in text:
+        return (None, True) if "매도" in text.replace("순매수", "") else ("net_buy", False)
+    return _single(text, {"매수": "buy", "매도": "sell"})
+
+
+def _flow_measure_and_unit(text: str) -> tuple[str | None, str | None, tuple[str, ...]]:
+    """수급의 measure/unit. 둘 다 정책값이 있지만 사용자가 말하면 그쪽을 따른다."""
+    measure, measure_ambiguous = _single(text, _MEASURES)
+    unit, unit_ambiguous = _single(text, _UNITS)
+    if measure_ambiguous:
+        return None, None, ("measure",)
+    if unit_ambiguous:
+        return None, None, ("unit",)
+    if unit is not None and measure is None:
+        measure = _UNIT_MEASURE[unit]   # 단위가 measure 를 결정한다
+    if measure is None:
+        return POLICY_MEASURE, POLICY_UNIT, ()
+    if unit is None:
+        unit = POLICY_UNIT if measure == "amount" else "shares"
+    if (measure, unit) not in _VALID_FLOW_UNITS:
+        return None, None, ("unit",)
+    return measure, unit, ()
+
+
+def _indicator_family(text: str) -> tuple[str | None, bool]:
+    explicit, ambiguous = _single(text, INDICATOR_FAMILIES)
+    if explicit is not None or ambiguous:
+        return explicit, ambiguous
+    return _single(text, _INDICATOR_FAMILY_BY_TERM)
+
+
+def resolve_parameters(
     need: EvidenceNeed,
     text: str,
     *,
     stock_code: str,
     stock_name: str,
     as_of: datetime,
-) -> tuple[tuple[str, str, dict[str, object]], ...]:
-    if need is EvidenceNeed.FINANCIAL_STATEMENT:
-        accounts = [name for name in _ACCOUNT_NAMES if name in text]
-        return ((
-            "dart",
-            "financial_statement",
-            {
-                "stock_code": stock_code,
-                "bsns_year": _year(text),
-                "reprt_code": _single_match(text, _REPORT_CODES),
-                "fs_div": _single_match(text, {"연결": "CFS", "별도": "OFS"}),
-                "account_names": accounts,
-            },
-        ),)
-    if need is EvidenceNeed.FINANCIAL_INDICATOR:
-        return ((
-            "dart",
-            "financial_indicator",
-            {
-                "stock_code": stock_code,
-                "bsns_year": _year(text),
-                "reprt_code": _single_match(text, _REPORT_CODES),
-                "indicator_family": _single_match(text, _INDICATOR_FAMILIES),
-            },
-        ),)
+) -> ParameterResolution:
+    """need 와 문장으로부터 Provider 호출 파라미터를 만든다."""
+
     if need is EvidenceNeed.DISCLOSURE:
-        return (("dart", "disclosure_list", {"stock_code": stock_code}),)
+        return ParameterResolution(
+            planned=(("dart", "disclosure_list", {"stock_code": stock_code}),)
+        )
+
     if need is EvidenceNeed.NEWS:
-        return tuple(
-            ("naver", "news_search", params)
-            for params in build_query_params(stock_code, stock_name)
+        return ParameterResolution(
+            planned=tuple(
+                ("naver", "news_search", params)
+                for params in build_query_params(stock_code, stock_name)
+            )
         )
+
     if need is EvidenceNeed.MARKET_PRICE:
-        return ((
-            "kiwoom",
-            "daily_price_history",
-            {
-                "stock_code": stock_code,
-                "base_date": as_of.strftime("%Y%m%d"),
-                "adjusted_price": "비수정주가" not in text,
-            },
-        ),)
-    if need is EvidenceNeed.INVESTOR_FLOW:
-        measure = _single_match(text, {"수량": "quantity", "금액": "amount"})
-        trade_kind = _single_match(
-            text.replace("순매수", ""),
-            {"매수": "buy", "매도": "sell"},
-        ) if "순매수" not in text else "net_buy"
-        unit = _single_match(
-            text,
-            {"주 단위": "shares", "천주": "thousand_shares", "백만원": "million_krw"},
+        # 기준일과 수정주가 여부는 둘 다 조회 정책이다.
+        return ParameterResolution(
+            planned=(
+                (
+                    "kiwoom",
+                    "daily_price_history",
+                    {
+                        "stock_code": stock_code,
+                        "base_date": as_of.strftime("%Y%m%d"),
+                        "adjusted_price": "비수정주가" not in text,
+                    },
+                ),
+            ),
+            policy_applied=("base_date", "adjusted_price"),
         )
-        return ((
-            "kiwoom",
-            "investor_flow",
-            {
-                "stock_code": stock_code,
-                "date": as_of.strftime("%Y%m%d"),
-                "measure": measure,
-                "trade_kind": trade_kind,
-                "unit": unit,
-            },
-        ),)
-    return ()
+
+    if need is EvidenceNeed.INVESTOR_FLOW:
+        trade_kind, _ = _trade_kind(text)
+        measure, unit, unit_missing = _flow_measure_and_unit(text)
+        missing = []
+        if trade_kind is None:
+            missing.append("trade_kind")   # 매수인지 매도인지는 사용자 사실이다
+        missing.extend(unit_missing)
+        if missing:
+            return ParameterResolution(missing=tuple(missing))
+        policy = ["date"]
+        if not contains_any(text, tuple(_MEASURES)) and not contains_any(text, tuple(_UNITS)):
+            policy.extend(("measure", "unit"))
+        return ParameterResolution(
+            planned=(
+                (
+                    "kiwoom",
+                    "investor_flow",
+                    {
+                        "stock_code": stock_code,
+                        "date": as_of.strftime("%Y%m%d"),
+                        "measure": measure,
+                        "trade_kind": trade_kind,
+                        "unit": unit,
+                    },
+                ),
+            ),
+            policy_applied=tuple(policy),
+        )
+
+    if need in {EvidenceNeed.FINANCIAL_STATEMENT, EvidenceNeed.FINANCIAL_INDICATOR}:
+        year, _ = _year(text)
+        report_code, report_ambiguous = _single(text, _REPORT_CODES)
+        missing: list[str] = []
+        policy: list[str] = []
+        if year is None:
+            # 🔴 사업연도는 사용자 사실이다. 시스템이 고르면 사용자가 하지 않은
+            #    주장을 검증하게 된다.
+            missing.append("bsns_year")
+        if report_ambiguous:
+            missing.append("reprt_code")
+        elif report_code is None:
+            report_code = POLICY_REPORT_CODE
+            policy.append("reprt_code")
+
+        if need is EvidenceNeed.FINANCIAL_STATEMENT:
+            fs_div, fs_ambiguous = _single(text, _FS_DIV)
+            accounts = [name for name in ACCOUNT_TERMS if name in text]
+            if fs_ambiguous:
+                missing.append("fs_div")
+            elif fs_div is None:
+                fs_div = POLICY_FS_DIV
+                policy.append("fs_div")
+            if not accounts:
+                missing.append("account_names")
+            if missing:
+                return ParameterResolution(missing=tuple(missing))
+            return ParameterResolution(
+                planned=(
+                    (
+                        "dart",
+                        "financial_statement",
+                        {
+                            "stock_code": stock_code,
+                            "bsns_year": year,
+                            "reprt_code": report_code,
+                            "fs_div": fs_div,
+                            "account_names": accounts,
+                        },
+                    ),
+                ),
+                policy_applied=tuple(policy),
+            )
+
+        family, family_ambiguous = _indicator_family(text)
+        if family_ambiguous or family is None:
+            missing.append("indicator_family")
+        if missing:
+            return ParameterResolution(missing=tuple(missing))
+        return ParameterResolution(
+            planned=(
+                (
+                    "dart",
+                    "financial_indicator",
+                    {
+                        "stock_code": stock_code,
+                        "bsns_year": year,
+                        "reprt_code": report_code,
+                        "indicator_family": family,
+                    },
+                ),
+            ),
+            policy_applied=tuple(policy),
+        )
+
+    return ParameterResolution()
+
+
+def missing_parameters(need: EvidenceNeed, text: str) -> tuple[str, ...]:
+    """조회를 막고 있는 파라미터 이름. 종목·시각과 무관하게 답할 수 있다.
+
+    n9 가 stock 없이도 "이 Claim 은 계획하지 않는 것이 맞다" 를 판정하려면
+    이 질문이 종목 정보에서 독립이어야 한다. 그래서 placeholder 로 푼다.
+    """
+    if need is EvidenceNeed.UNKNOWN:
+        return ()
+    return resolve_parameters(
+        need,
+        text,
+        stock_code="005930",
+        stock_name="placeholder",
+        as_of=datetime(2026, 1, 1),
+    ).missing
 
 
 def plan_claim_queries(
@@ -129,7 +321,7 @@ def plan_claim_queries(
     policy = get_slot_definition(claim.slot_id).evidence_policy
     intent = "counter" if policy is EvidencePolicy.SYSTEM_OPPOSING_SEARCH else "verify"
     try:
-        planned = _provider_params(
+        resolution = resolve_parameters(
             need,
             claim.normalized_proposition,
             stock_code=stock_code,
@@ -137,6 +329,8 @@ def plan_claim_queries(
             as_of=as_of,
         )
     except ValueError:
+        return ()
+    if not resolution.ready:
         return ()
     return tuple(
         Query(
@@ -149,8 +343,18 @@ def plan_claim_queries(
             params=params,
             created_at=clock(),
         )
-        for provider, endpoint, params in planned
+        for provider, endpoint, params in resolution.planned
     )
 
 
-__all__ = ["plan_claim_queries"]
+__all__ = [
+    "POLICY_ADJUSTED_PRICE",
+    "POLICY_FS_DIV",
+    "POLICY_MEASURE",
+    "POLICY_REPORT_CODE",
+    "POLICY_UNIT",
+    "ParameterResolution",
+    "missing_parameters",
+    "plan_claim_queries",
+    "resolve_parameters",
+]

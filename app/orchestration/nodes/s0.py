@@ -52,7 +52,7 @@ from app.orchestration.drafts import (
     RenderDraft,
 )
 from app.orchestration.evidence_packing import fits_budget, pack_evidence
-from app.orchestration.evidence_planning import plan_claim_queries
+from app.orchestration.evidence_planning import missing_parameters, plan_claim_queries
 from app.orchestration.hitl import StockChoiceRequest, StockChoiceResume, select_stock
 from app.orchestration.intake_review_runtime import (
     HitlResumeEvent,
@@ -719,14 +719,21 @@ def make_nodes(deps: RuntimeDeps):
         }
         deterministic_drafts = []
         evidence_backed = []
-        unknown_need_claim_ids: set[str] = set()
         for claim in claims:
             if not claim.verifiable:
                 continue
             if claim.claim_id not in queried_claim_ids:
-                if classify_evidence_need(claim) is EvidenceNeed.UNKNOWN:
-                    unknown_need_claim_ids.add(claim.claim_id)
-                else:
+                # 🔴 B1 — Query 가 없는 데는 두 가지 정당한 이유가 있다.
+                #      1) 무슨 근거가 필요한지 모른다            (need = UNKNOWN)
+                #      2) 무슨 근거인지는 아는데 값이 부족하다    (missing parameters)
+                #    2번을 계약 위반으로 보면 "삼성전자 영업이익이 증가했다"
+                #    처럼 연도를 말하지 않은 정상 입력이 run 을 통째로 막는다.
+                #    계약 위반은 **계획했어야 하는데 안 한 경우**만 남는다.
+                need = classify_evidence_need(claim)
+                planned_is_required = need is not EvidenceNeed.UNKNOWN and not missing_parameters(
+                    need, claim.normalized_proposition
+                )
+                if planned_is_required:
                     return {
                         "node_results": [
                             f"n9:block:{ReasonCode.CONTRACT_VIOLATION.value}"
