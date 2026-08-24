@@ -81,6 +81,19 @@ def test_build_request_uses_semantic_endpoint_and_hides_credentials():
     assert "client-secret" not in repr(req)
 
 
+def test_build_request_accepts_fifth_position_alpha_krx_code():
+    mod = _adapter_module()
+    adapter = mod.NaverAdapter("client-id", "client-secret")
+    params = dict(_query().params)
+    params.update(
+        stock_code="0126Z0",
+        stock_name="삼성에피스홀딩스",
+        query="0126Z0",
+    )
+    req = adapter.build_request(_query(params=params), NOW)
+    assert req.params["query"] == "0126Z0"
+
+
 def test_parse_response_filters_irrelevant_docs_and_returns_news_evidence_draft():
     mod = _adapter_module()
     adapter = mod.NaverAdapter("client-id", "client-secret")

@@ -31,6 +31,7 @@ XML = (
     + entry("00126380", "삼성전자", "005930")
     + entry("00126380", "삼성전자우", "005935")
     + entry("00164779", "SK하이닉스", "000660")
+    + entry("01965324", "삼성에피스홀딩스", "0126Z0")
     + entry("00999999", "비상장회사", " ")
     + entry("bad", "corp_code 형식오류", "111111")
     + entry("00888888", "stock_code 형식오류", "12345")
@@ -53,6 +54,7 @@ def test_상장_종목만_남긴다():
         "005930": "00126380",
         "005935": "00126380",
         "000660": "00164779",
+        "0126Z0": "01965324",
     }
 
 
@@ -152,6 +154,14 @@ def test_적재한_매핑을_DartCorpCodeResolver가_받는다(tmp_path):
     path = save_mapping(tmp_path / "corp.json", parse_corp_code_xml(XML))
     resolver = DartCorpCodeResolver(load_mapping(path))
     assert resolver.resolve("005930") == "00126380"
+
+
+def test_영문_다섯번째_KRX코드는_cache와_DART_resolver에서_보존된다(tmp_path):
+    mapping = parse_corp_code_xml(XML)
+    path = save_mapping(tmp_path / "corp.json", mapping)
+    loaded = load_mapping(path)
+    assert loaded["0126Z0"] == "01965324"
+    assert DartCorpCodeResolver(loaded).resolve("0126Z0") == "01965324"
 
 
 # ── fetch ─────────────────────────────────────────────────────────

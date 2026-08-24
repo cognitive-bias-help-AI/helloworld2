@@ -21,15 +21,11 @@ OpenDART `corpCode.xml` 엔드포인트는 XML 이 아니라 **ZIP** 을 돌려�
 
 비상장 법인은 `stock_code` 가 비어 있다. 전체 10만 건 중 상장분은 3천 건대다.
 
-■ 🔴 stock_code 가 6자리 숫자인 것만 담는다
+■ stock_code 와 corp_code 는 서로 다른 식별자다
 
-`KRXCode` 는 `[0-9]{5}[0-9A-Z]` 라 `00088K` 같은 문자 코드를 허용하지만,
-그건 신주인수권증서·전환사채처럼 **발행 증권(Security)** 쪽 코드다.
-DART 는 **발행 법인(Issuer)** 단위라 그런 코드를 싣지 않는다.
-
-따라서 여기서 숫자 6자리만 남기는 것은 데이터 손실이 아니라 도메인 차이다.
-우선주(005935)는 숫자라서 그대로 들어온다. Security -> Issuer 변환이 필요한
-경우는 StockResolver 쪽에서 풀 문제이지 이 로더가 넓힐 문제가 아니다.
+`stock_code` 는 canonical KRX security identifier이고, `corp_code` 는 DART의
+8자리 issuer identifier다. 영문이 포함됐다는 사실만으로 stock_code를 issuer
+mapping에서 제외할 수 없다. 실제 DART 원본은 0126Z0 -> 01965324를 제공한다.
 """
 
 from __future__ import annotations
@@ -43,7 +39,7 @@ from typing import Any, Final
 from xml.etree import ElementTree
 
 CORP_CODE_URL: Final = "https://opendart.fss.or.kr/api/corpCode.xml"
-_STOCK_CODE: Final = re.compile(r"^\d{6}$")
+_STOCK_CODE: Final = re.compile(r"^[0-9]{4}[0-9A-Z]{2}$")
 _CORP_CODE: Final = re.compile(r"^\d{8}$")
 _XML_MEMBER: Final = "CORPCODE.xml"
 

@@ -26,8 +26,8 @@ def _stock_code(value: object) -> str:
     if (
         not isinstance(value, str)
         or len(value) != 6
-        or not value[:5].isdigit()
-        or not (value[5].isdigit() or "A" <= value[5] <= "Z")
+        or not value[:4].isdigit()
+        or any(not (character.isdigit() or "A" <= character <= "Z") for character in value[4:])
     ):
         raise ValueError("stock_code must be a six-character KRX code")
     return value

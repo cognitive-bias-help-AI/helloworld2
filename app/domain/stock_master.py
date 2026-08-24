@@ -28,6 +28,7 @@ _OBSERVED_EXCLUDED_SECURITY_GROUPS = frozenset(
 _OBSERVED_PREFERRED_CERTIFICATE_TYPES = frozenset(
     {"구형우선주", "신형우선주"}
 )
+_OBSERVED_EXCLUDED_CERTIFICATE_TYPES = frozenset({"종류주권"})
 
 
 class StockMasterRecord(BaseModel):
@@ -43,7 +44,7 @@ class StockMasterRecord(BaseModel):
 class ExcludedKrxRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    code: KRXCode
+    code: NonBlankStr
     security_group: NonBlankStr
 
 
@@ -135,6 +136,9 @@ def parse_krx_rows(
         if security_group != "주권":
             raise ValueError(f"unknown KRX security group: {security_group}")
         if "SPAC" in str(row.get("SECT_TP_NM") or "").upper():
+            excluded.append(record_identity)
+            continue
+        if certificate_type in _OBSERVED_EXCLUDED_CERTIFICATE_TYPES:
             excluded.append(record_identity)
             continue
         if certificate_type == "보통주":

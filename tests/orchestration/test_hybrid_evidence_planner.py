@@ -246,3 +246,66 @@ def test_primary_support_evidence_can_assemble_support_verdict():
         primary_evidence_ids={evidence_id},
     )
     assert result.verdict == "support"
+
+
+def test_0126Z0_financial_claim_keeps_DART_primary_and_NAVER_corroborative():
+    result = plan_hybrid_claim(
+        claim("2025년 영업이익이 증가했다"),
+        intent(EvidenceCategory.FINANCIAL_PERFORMANCE, topic_terms=["영업이익"]),
+        stock_code="0126Z0",
+        stock_name="삼성에피스홀딩스",
+        as_of=NOW,
+        id_factory=iter([uid(60), uid(61)]).__next__,
+        clock=lambda: NOW,
+    )
+    assert {(q.provider, q.endpoint) for q in result.queries} == {
+        ("dart", "financial_statement"),
+        ("naver", "news_search"),
+    }
+
+
+def test_0126Z0_news_claim_can_plan_NAVER_primary():
+    result = plan_hybrid_claim(
+        claim("최근 뉴스가 나왔다"),
+        intent(EvidenceCategory.NEWS_EVENT, topic_terms=["최근 뉴스"]),
+        stock_code="0126Z0",
+        stock_name="삼성에피스홀딩스",
+        as_of=NOW,
+        id_factory=iter([uid(62), uid(63)]).__next__,
+        clock=lambda: NOW,
+    )
+    primary = next(item for item in result.requirements if item.role is EvidenceRole.PRIMARY)
+    assert primary.status is RequirementStatus.READY
+    assert (primary.query.provider, primary.query.endpoint) == ("naver", "news_search")
+
+
+def test_0126Z0_price_claim_marks_Kiwoom_primary_unavailable_without_query():
+    result = plan_hybrid_claim(
+        claim("최근 주가가 많이 올랐다"),
+        intent(EvidenceCategory.PRICE_MOVEMENT, topic_terms=["최근 주가"]),
+        stock_code="0126Z0",
+        stock_name="삼성에피스홀딩스",
+        as_of=NOW,
+        id_factory=iter([uid(64)]).__next__,
+        clock=lambda: NOW,
+    )
+    primary = next(item for item in result.requirements if item.role is EvidenceRole.PRIMARY)
+    assert primary.status is RequirementStatus.SOURCE_UNAVAILABLE
+    assert primary.query is None
+    assert {(q.provider, q.endpoint) for q in result.queries} == {
+        ("naver", "news_search")
+    }
+
+
+def test_0126Z0_baseline_omits_only_unverified_Kiwoom_capability():
+    queries = plan_baseline_queries(
+        stock_code="0126Z0",
+        stock_name="삼성에피스홀딩스",
+        as_of=NOW,
+        id_factory=iter([uid(65), uid(66)]).__next__,
+        clock=lambda: NOW,
+    )
+    assert {(q.provider, q.endpoint) for q in queries} == {
+        ("dart", "disclosure_list"),
+        ("naver", "news_search"),
+    }

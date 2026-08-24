@@ -147,6 +147,12 @@ _PROVIDER_CONTRACT_CODES = frozenset({1501, 1504, 1505, 1687}) | frozenset(
 _STOCK_CODE = re.compile(r"^[0-9]{6}(?:_(?:NX|AL))?$")
 
 
+def supports_stock_code(value: object) -> bool:
+    """Return whether the current Kiwoom upstream contract accepts the code."""
+
+    return isinstance(value, str) and _STOCK_CODE.fullmatch(value) is not None
+
+
 class KiwoomAdapter:
     """Injected HTTP client, authentication, one request, and normalization."""
 
@@ -265,7 +271,7 @@ class KiwoomAdapter:
         if supplied != contract.required or supplied - contract.allowed:
             return ProviderError(ErrorCategory.INVALID_REQUEST, "invalid TR params", False)
         stock_code = request.params.get("stk_cd")
-        if stock_code is not None and not _STOCK_CODE.fullmatch(stock_code):
+        if stock_code is not None and not supports_stock_code(stock_code):
             return ProviderError(ErrorCategory.INVALID_REQUEST, "invalid stock code", False)
         for field_name in {"dt", "base_dt"} & supplied:
             try:

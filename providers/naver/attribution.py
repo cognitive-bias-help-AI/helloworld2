@@ -11,7 +11,7 @@ import re
 from .models import AttributionDecision, NaverEntityProfile
 
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+")
-_KRX_CODE_RE = re.compile(r"(?<![0-9A-Z])[0-9]{5}[0-9A-Z](?![0-9A-Z])", re.IGNORECASE)
+_KRX_CODE_RE = re.compile(r"(?<![0-9A-Z])[0-9]{4}[0-9A-Z]{2}(?![0-9A-Z])", re.IGNORECASE)
 _MARKET_ROUNDUP_CODE_COUNT = 3
 
 

@@ -87,6 +87,30 @@ def test_full_master는_없는_회사와_긴_이름_masking을_보존한다():
     assert resolver.resolve_exact("03473K")[0].code == "03473K"
 
 
+@pytest.mark.parametrize("query", ["삼성에피스홀딩스", "0126Z0", "0126Z0 살까?"])
+def test_full_master는_다섯번째_영문코드를_이름과_코드로_resolve한다(query):
+    record = StockMasterRecord(
+        code="0126Z0",
+        name="삼성에피스홀딩스",
+        market="KOSPI",
+        asset_type=AssetType.COMMON_STOCK,
+        listing_date="20251124",
+    )
+    value = StockMasterSnapshot(
+        schema_version="krx_stock_master/v1",
+        source="KRX_OPEN_API",
+        as_of="20260821",
+        generated_at="2026-08-24T00:00:00Z",
+        record_count=1,
+        records=(record,),
+    )
+    result = StockMasterResolver(value).resolve(query)
+    assert [(item.code, item.match_kind) for item in result] == [
+        ("0126Z0", "exact_name" if query == "삼성에피스홀딩스" else "exact_code")
+    ]
+    assert StockMasterResolver(value).resolve_exact("0126Z0")[0].name == "삼성에피스홀딩스"
+
+
 def test_alias_overlay는_검색만_보조하고_canonical_identity를_바꾸지_않는다(tmp_path):
     overlay = tmp_path / "aliases.csv"
     overlay.write_text(
@@ -143,6 +167,37 @@ def test_KRX_rows는_supported를_mapping하고_observed_unsupported를_제외�
     assert {item.security_group for item in excluded} == {"부동산투자회사", "외국주권"}
 
 
+def test_0126Z0_KOSPI_보통주는_COMMON_STOCK_snapshot으로_round_trip한다(tmp_path):
+    supported, excluded = parse_krx_rows(
+        [row("0126Z0", "삼성에피스홀딩스", "KOSPI")],
+        expected_market="KOSPI",
+    )
+    assert excluded == ()
+    assert supported[0].asset_type is AssetType.COMMON_STOCK
+
+    value = StockMasterSnapshot(
+        schema_version="krx_stock_master/v1",
+        source="KRX_OPEN_API",
+        as_of="20260821",
+        generated_at="2026-08-24T00:00:00Z",
+        record_count=1,
+        records=supported,
+    )
+    path = tmp_path / "master.json"
+    write_stock_master_atomic(path, value)
+    assert load_stock_master(path) == value
+
+
+def test_unsupported_security_group의_non_equity_identifier는_제외_기록으로_보존한다():
+    supported, excluded = parse_krx_rows(
+        [row("0030R0", "리츠", "KOSPI", security_group="부동산투자회사")],
+        expected_market="KOSPI",
+    )
+
+    assert supported == ()
+    assert excluded[0].code == "0030R0"
+
+
 @pytest.mark.parametrize(
     ("certificate_type", "code"),
     [("구형우선주", "005935"), ("신형우선주", "00680K")],
@@ -159,12 +214,16 @@ def test_KRX에서_관측된_우선주_종류만_preferred로_mapping한다(
     assert supported[0].asset_type is AssetType.PREFERRED_STOCK
 
 
-def test_종류주권은_preferred로_추론하지_않고_fail_closed한다():
-    with pytest.raises(ValueError, match="unknown KRX certificate type: 종류주권"):
-        parse_krx_rows(
-            [row("03473K", "SK우", "KOSPI", certificate_type="종류주권")],
-            expected_market="KOSPI",
-        )
+def test_종류주권은_preferred로_추론하지_않고_explicit_unsupported로_제외한다():
+    supported, excluded = parse_krx_rows(
+        [row("03473K", "SK우", "KOSPI", certificate_type="종류주권")],
+        expected_market="KOSPI",
+    )
+
+    assert supported == ()
+    assert [(item.code, item.security_group) for item in excluded] == [
+        ("03473K", "주권")
+    ]
 
 
 @pytest.mark.parametrize(

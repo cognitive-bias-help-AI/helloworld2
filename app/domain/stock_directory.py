@@ -36,7 +36,7 @@ from app.domain.stock_matcher import MatchableStock, StockMatcher, chosung_of, n
 from app.domain.stock_scope import AssetType, InstrumentCandidate
 from app.schemas.frozen import StockCandidate
 
-_KRX_CODE: Final = re.compile(r"^[0-9]{5}[0-9A-Z]$")
+_KRX_CODE: Final = re.compile(r"^[0-9]{4}[0-9A-Z]{2}$")
 @dataclass(frozen=True, slots=True)
 class _Row:
     code: str

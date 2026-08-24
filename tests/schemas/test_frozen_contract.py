@@ -206,7 +206,7 @@ def cite(eid: str) -> m.CitationRef:
 # ══════════════════════════════════════════════════════════════════
 _EXTRA = ("extra_forbidden", "Extra inputs are not permitted")
 _ULID = ("string_pattern_mismatch", "^[0-7][0-9A-HJKMNP-TV-Z]{25}$")
-_KRX = ("string_pattern_mismatch", "^[0-9]{5}[0-9A-Z]$")
+_KRX = ("string_pattern_mismatch", "^[0-9]{4}[0-9A-Z]{2}$")
 _BLANK = ("string_too_short", "at least 1 character")
 
 REJECT: list[tuple[str, str, Any, tuple[str, str]]] = [
@@ -376,6 +376,19 @@ def test_통과(case_id: str, label: str, fn: Any) -> None:
     """🔴 여기가 빨개지면 스키마가 정당한 케이스를 잘라내고 있다는 뜻이다.
     테스트를 고치지 말고 보고해라."""
     assert fn() is not None
+
+
+@pytest.mark.parametrize("code", ["005930", "00088K", "03473K", "0126Z0", "0001A0"])
+def test_KRXCode는_관측된_6자리_정규코드를_허용한다(code: str) -> None:
+    assert stock(code=code).code == code
+
+
+@pytest.mark.parametrize(
+    "code", ["A126Z0", "01A6Z0", "0126z0", "0126-0", "126Z0", "00126Z0"]
+)
+def test_KRXCode는_관측범위_밖_형식을_fail_closed한다(code: str) -> None:
+    with pytest.raises(ValidationError):
+        stock(code=code)
 
 
 # ══════════════════════════════════════════════════════════════════

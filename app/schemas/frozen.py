@@ -45,12 +45,12 @@ ULID = Annotated[
     str,
     StringConstraints(pattern=r"^[0-7][0-9A-HJKMNP-TV-Z]{25}$"),
 ]
-# 🔴 v2.1c 수정: 신형우선주 단축코드는 마지막 1자리가 영문이다.
-#    실재 예 — 00781K(코리아써키트2우B) 03473K(SK우) 18064K(한진칼우) 02826K(삼성물산우B)
-#    ^\d{6}$ 로 두면 이 종목들이 스키마 단계에서 원천 차단된다.
-#    반증 조건: T1-B 가 KRX 상장종목 마스터를 적재할 때 이 패턴에
-#              맞지 않는 단축코드가 1건이라도 나오면 패턴을 넓힌다.
-KRXCode = Annotated[str, StringConstraints(pattern=r"^[0-9]{5}[0-9A-Z]$")]
+# 🔴 vNext 수정: 이전 계약은 영문을 마지막 1자리에서만 허용했다.
+#    2026-08-21 실제 KRX 마스터에는 0126Z0(삼성에피스홀딩스)처럼 다섯 번째
+#    자리가 영문인 정상 범위 주식이 존재한다. 관측된 모든 코드는 첫 4자리가
+#    여전히 숫자이므로 그 근거보다 넓히지 않는다. 향후 authoritative KRX
+#    마스터가 이 계약 밖의 정상 범위 코드를 제공하면 같은 반증 원칙을 적용한다.
+KRXCode = Annotated[str, StringConstraints(pattern=r"^[0-9]{4}[0-9A-Z]{2}$")]
 Sha256Hex = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 NonBlankStr = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
 # 🆕 v2.2 S-6: 리포트에 그대로 링크로 실리는 값이다.

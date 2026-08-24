@@ -62,3 +62,15 @@ def test_rejects_market_roundup_when_only_code_is_mentioned():
     )
     assert result.is_relevant is False
     assert result.reason.startswith("market_roundup:")
+
+
+def test_fifth_position_alpha_code_participates_in_boundary_aware_roundup_detection():
+    mod, models = _module(), _models()
+    profile = models.NaverEntityProfile(code="0126Z0", name="삼성에피스홀딩스")
+    result = mod.judge_attribution(
+        "이번 주 외국인 매수 상위 종목",
+        "삼성에피스홀딩스(0126Z0), 삼성전자(005930), SK하이닉스(000660)가 포함됐다.",
+        profile,
+    )
+    assert result.is_relevant is False
+    assert result.reason == "market_roundup:3codes"

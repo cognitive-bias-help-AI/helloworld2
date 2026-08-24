@@ -68,3 +68,9 @@ def test_query_validation_rejects_invalid_krx_code_and_display():
         mod.build_query_params("5930", "삼성전자")
     with pytest.raises(ValueError, match="display"):
         mod.build_query_params("005930", "삼성전자", display=101)
+
+
+def test_query_planning_accepts_fifth_position_alpha_krx_code():
+    mod = _module()
+    params = mod.build_query_params("0126Z0", "삼성에피스홀딩스")
+    assert params[0]["stock_code"] == "0126Z0"

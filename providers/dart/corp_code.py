@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
-_STOCK_CODE = re.compile(r"\d{6}")
+_STOCK_CODE = re.compile(r"[0-9]{4}[0-9A-Z]{2}")
 _CORP_CODE = re.compile(r"\d{8}")
 
 
@@ -15,14 +15,14 @@ class DartCorpCodeResolver:
     def __init__(self, mapping: Mapping[str, str]) -> None:
         values = dict(mapping)
         if any(_STOCK_CODE.fullmatch(key) is None for key in values):
-            raise ValueError("DART stock_code must be six digits")
+            raise ValueError("DART stock_code must be a canonical KRX code")
         if any(_CORP_CODE.fullmatch(value) is None for value in values.values()):
             raise ValueError("DART corp_code must be eight digits")
         self._mapping = values
 
     def resolve(self, stock_code: str) -> str:
         if _STOCK_CODE.fullmatch(stock_code) is None:
-            raise ValueError("DART stock_code must be six digits")
+            raise ValueError("DART stock_code must be a canonical KRX code")
         try:
             return self._mapping[stock_code]
         except KeyError as exc:

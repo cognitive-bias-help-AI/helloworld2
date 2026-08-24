@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from app.domain.stock_scope import AssetType, InstrumentCandidate
 from app.schemas.frozen import StockCandidate
 
-_CODE_IN_TEXT = re.compile(r"(?<![0-9A-Z])([0-9]{5}[0-9A-Z])(?![0-9A-Z])")
+_CODE_IN_TEXT = re.compile(r"(?<![0-9A-Z])([0-9]{4}[0-9A-Z]{2})(?![0-9A-Z])")
 _WS = re.compile(r"\s+")
 _CHOSUNG = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
 _SCORE = {"exact_code": 1.0, "exact_name": 1.0, "alias": 0.9, "prefix": 0.7, "chosung": 0.5}

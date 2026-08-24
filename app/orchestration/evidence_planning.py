@@ -57,6 +57,7 @@ from app.domain.evidence_requirement import (
 from app.domain.slots import EvidencePolicy, get_slot_definition
 from app.orchestration.drafts import EvidenceIntentDraft
 from app.schemas.frozen import Claim, Query
+from providers.kiwoom.core import supports_stock_code as kiwoom_supports_stock_code
 from providers.naver.query import build_query_params
 
 _YEAR: Final = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
@@ -223,6 +224,8 @@ def resolve_parameters(
         )
 
     if need is EvidenceNeed.MARKET_PRICE:
+        if not kiwoom_supports_stock_code(stock_code):
+            return ParameterResolution()
         # 기준일과 수정주가 여부는 둘 다 조회 정책이다.
         return ParameterResolution(
             planned=(
@@ -240,6 +243,8 @@ def resolve_parameters(
         )
 
     if need is EvidenceNeed.INVESTOR_FLOW:
+        if not kiwoom_supports_stock_code(stock_code):
+            return ParameterResolution()
         trade_kind, _ = _trade_kind(text)
         measure, unit, unit_missing = _flow_measure_and_unit(text)
         missing = []
@@ -406,6 +411,13 @@ def plan_baseline_queries(
     specifications = [
         ("dart", "disclosure_list", {"stock_code": stock_code}),
         (
+            "naver",
+            "news_search",
+            build_query_params(stock_code, stock_name)[0],
+        ),
+    ]
+    if kiwoom_supports_stock_code(stock_code):
+        specifications.insert(1, (
             "kiwoom",
             "daily_price_history",
             {
@@ -413,13 +425,7 @@ def plan_baseline_queries(
                 "base_date": as_of.strftime("%Y%m%d"),
                 "adjusted_price": POLICY_ADJUSTED_PRICE,
             },
-        ),
-        (
-            "naver",
-            "news_search",
-            build_query_params(stock_code, stock_name)[0],
-        ),
-    ]
+        ))
     return tuple(
         Query(
             query_id=id_factory(),

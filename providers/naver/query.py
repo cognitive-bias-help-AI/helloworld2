@@ -21,7 +21,7 @@ QueryStrategy = Literal[
     "curation_adaptive",
 ]
 
-_KRX_CODE_RE = re.compile(r"^[0-9]{5}[0-9A-Z]$")
+_KRX_CODE_RE = re.compile(r"^[0-9]{4}[0-9A-Z]{2}$")
 _ALLOWED_SORTS = {"date", "sim"}
 
 

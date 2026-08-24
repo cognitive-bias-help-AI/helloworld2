@@ -483,18 +483,26 @@ def make_nodes(deps: RuntimeDeps):
                 ]
             }
         as_of = datetime.fromisoformat(state["as_of"])
-        queries: list[Query] = list(plan_baseline_queries(
+        baseline_queries = list(plan_baseline_queries(
             stock_code=stock["code"],
             stock_name=stock["name"],
             as_of=as_of,
             id_factory=deps.id_factory,
             clock=deps.clock,
         ))
+        queries: list[Query] = list(baseline_queries)
+        baseline_providers = {query.provider for query in baseline_queries}
         debug_log(
             "n5",
             "BASELINE",
             **{
-                provider: "READY" if provider in deps.adapters else "UNAVAILABLE"
+                provider: (
+                    "SOURCE_UNAVAILABLE"
+                    if provider not in baseline_providers
+                    else "READY"
+                    if provider in deps.adapters
+                    else "UNAVAILABLE"
+                )
                 for provider in ("dart", "kiwoom", "naver")
             },
         )
@@ -611,7 +619,7 @@ def make_nodes(deps: RuntimeDeps):
             else "partial"
         )
         debug_log(
-            "n5", "SUMMARY", baseline_queries=3,
+            "n5", "SUMMARY", baseline_queries=len(baseline_queries),
             primary_queries=sum(q.scope == "claim" and q.intent in {"verify", "counter"} for q in queries),
             corroborative_queries=sum(q.scope == "claim" and q.intent == "context" for q in queries),
             source_limited_claims=source_limited_claims,

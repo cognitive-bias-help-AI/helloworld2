@@ -103,6 +103,15 @@ def test_resolve_exact가_asset_type을_보존한다(tmp_path):
     assert evaluate_stock_scope(instrument).supported is True
 
 
+def test_CSV_resolver는_다섯번째_영문코드를_직접_해석한다(tmp_path):
+    resolver = directory(
+        tmp_path,
+        HEADER + "0126Z0,삼성에피스홀딩스,KOSPI,COMMON_STOCK,,0,0\n",
+    )
+    assert resolver.resolve_exact("0126Z0")[0].name == "삼성에피스홀딩스"
+    assert resolver.resolve("0126Z0 살까?")[0].match_kind == "exact_code"
+
+
 # ── CSV 검증 ──────────────────────────────────────────────────────
 
 

@@ -135,6 +135,24 @@ def test_build_request는_semantic_endpoint를_supported_TR로_mapping한다(
     assert request.params == core_params
 
 
+def test_검증되지_않은_영문_KRX코드는_Kiwoom_upstream_request로_만들지_않는다():
+    adapter = KiwoomAdapter(
+        RecordingCore(success_result("ka10081", {})), environment=Environment.MOCK
+    )
+    with pytest.raises(ValueError, match="six digits"):
+        adapter.build_request(
+            query(
+                "daily_price_history",
+                {
+                    "stock_code": "0126Z0",
+                    "base_date": "20260821",
+                    "adjusted_price": True,
+                },
+            ),
+            NOW,
+        )
+
+
 @pytest.mark.asyncio
 async def test_acall은_Main_Request를_Core_Request로_번역한다():
     core = RecordingCore(
