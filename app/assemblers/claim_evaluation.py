@@ -13,6 +13,8 @@ def assemble_claim_evaluation(
     numeric_checks: list[NumericCheck],
     claim_evaluation_id: str,
     created_at: datetime,
+    *,
+    primary_evidence_ids: set[str] | None = None,
 ) -> ClaimEvaluation:
     if len(packet_evidence_ids) != len(set(packet_evidence_ids)):
         raise AssemblyError("duplicate_reference", retryable=False)
@@ -31,6 +33,17 @@ def assemble_claim_evaluation(
         raise AssemblyError("unknown_reference", retryable=True)
     if any(check.evidence_id not in packet for check in numeric_checks):
         raise AssemblyError("unknown_reference", retryable=False)
+    if primary_evidence_ids is not None:
+        if not primary_evidence_ids <= packet:
+            raise AssemblyError("unknown_reference", retryable=False)
+        if draft.verdict in {"support", "partial_support"} and not (
+            set(draft.support_evidence_ids) & primary_evidence_ids
+        ):
+            raise AssemblyError("coverage_mismatch", retryable=True)
+        if draft.verdict == "contradicted" and not (
+            set(draft.oppose_evidence_ids) & primary_evidence_ids
+        ):
+            raise AssemblyError("coverage_mismatch", retryable=True)
     citations = sorted(draft.citations, key=lambda item: (item.evidence_id, item.span))
     checks = sorted(
         numeric_checks,

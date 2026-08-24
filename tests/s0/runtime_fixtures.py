@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from app.contexts.budget import ctx_chars
 from app.contexts.views import EvidencePacket, IntegrationView, RenderView, VerifyPacket
+from app.domain.evidence_requirement import EvidenceCategory
 from app.domain.intake import (
     FreeTextInput,
     HybridIntake,
@@ -17,6 +18,8 @@ from app.gateway.admission import ProviderAdmissionController
 from app.orchestration.drafts import (
     AskBackDraft,
     AskBackQuestionDraft,
+    EvidenceIntentDraft,
+    EvidenceRequirementDraft,
     ExtractedClaimDraft,
     FindingDraft,
     GuardScanResult,
@@ -107,6 +110,26 @@ class FlowGateway:
         elif output_schema is AskBackDraft:
             value = AskBackDraft(
                 questions=[AskBackQuestionDraft(slot_id=1, question="검증할 주장은 무엇인가요?")]
+            )
+        elif output_schema is EvidenceIntentDraft:
+            text = input_view.normalized_proposition
+            category = (
+                EvidenceCategory.FINANCIAL_PERFORMANCE
+                if any(term in text for term in ("영업이익", "매출액", "당기순이익"))
+                else EvidenceCategory.PRICE_MOVEMENT
+                if "주가" in text
+                else EvidenceCategory.NEWS_EVENT
+                if any(term in text for term in ("뉴스", "보도", "기사"))
+                else EvidenceCategory.DISCLOSURE_EVENT
+                if "공시" in text
+                else None
+            )
+            value = EvidenceIntentDraft(
+                requirements=(
+                    [EvidenceRequirementDraft(category=category)]
+                    if category is not None
+                    else []
+                )
             )
         elif output_schema is ClaimStanceDraft:
             assert isinstance(input_view, EvidencePacket)
@@ -233,7 +256,11 @@ def deps(gateway=None, resolver=None):
         ),
         model_gateway=gateway,
         stock_resolver=resolver,
-        adapters={"dart": MockAdapter("dart"), "naver": MockAdapter("naver")},
+        adapters={
+            "dart": MockAdapter("dart"),
+            "naver": MockAdapter("naver"),
+            "kiwoom": MockAdapter("kiwoom"),
+        },
         clock=lambda: NOW,
         id_factory=Ids(),
         render_candidates=RenderCandidateStore(),

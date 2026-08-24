@@ -2,8 +2,9 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, WithJsonSchema, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator, model_validator
 
+from app.domain.evidence_requirement import EvidenceCategory
 from app.domain.semantic import SemanticKind
 from app.schemas.frozen import ULID, CitationRef, NonBlankStr, ReasonCode, SlotId, Violation
 
@@ -90,6 +91,26 @@ class AskBackDraft(OutputModel):
     questions: list[AskBackQuestionDraft]
 
 
+class EvidenceRequirementDraft(OutputModel):
+    category: EvidenceCategory
+    topic_terms: list[NonBlankStr] = Field(default_factory=list, max_length=5)
+    direction: NonBlankStr | None = None
+    actor: NonBlankStr | None = None
+    comparison_target: NonBlankStr | None = None
+    temporal_expression: NonBlankStr | None = None
+
+
+class EvidenceIntentDraft(OutputModel):
+    requirements: list[EvidenceRequirementDraft] = Field(max_length=3)
+
+    @model_validator(mode="after")
+    def reject_duplicate_categories(self):
+        categories = [item.category for item in self.requirements]
+        if len(categories) != len(set(categories)):
+            raise ValueError("evidence categories must be unique per claim")
+        return self
+
+
 class FindingDraft(OutputModel):
     slot_id: SlotId
     kind: Literal["mismatch", "missing", "unverified", "conflict"]
@@ -103,8 +124,27 @@ class FindingDraft(OutputModel):
         return self
 
 
+class ViolationDraft(OutputModel):
+    slot_no: SlotId
+    rule_id: NonBlankStr
+    kind: Literal["lexicon", "pattern", "structure"]
+    matched: NonBlankStr
+    span_offset: SpanOffsetDraft
+
+    @field_validator("span_offset")
+    @classmethod
+    def validate_span_offset(cls, value: tuple[int, int]) -> tuple[int, int]:
+        start, end = value
+        if start < 0 or end <= start:
+            raise ValueError("span_offset requires 0 <= start < end")
+        return value
+
+    def to_canonical(self) -> Violation:
+        return Violation.model_validate(self.model_dump())
+
+
 class GuardVerdictDraft(OutputModel):
-    violations: list[Violation]
+    violations: list[ViolationDraft]
 
 
 class RenderedSlotDraft(OutputModel):

@@ -37,6 +37,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Final
 
 from app.domain.evidence_need import (
@@ -46,7 +47,15 @@ from app.domain.evidence_need import (
     classify_evidence_need,
     contains_any,
 )
+from app.domain.evidence_requirement import (
+    EVIDENCE_REQUIREMENT_REGISTRY,
+    CoverageLevel,
+    EvidenceCategory,
+    EvidenceRole,
+    EvidenceSourceRule,
+)
 from app.domain.slots import EvidencePolicy, get_slot_definition
+from app.orchestration.drafts import EvidenceIntentDraft
 from app.schemas.frozen import Claim, Query
 from providers.naver.query import build_query_params
 
@@ -102,6 +111,44 @@ class ParameterResolution:
     @property
     def ready(self) -> bool:
         return bool(self.planned) and not self.missing
+
+
+class RequirementStatus(StrEnum):
+    READY = "READY"
+    MISSING_USER_FACT = "MISSING_USER_FACT"
+    AMBIGUOUS = "AMBIGUOUS"
+    SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
+    UNSUPPORTED = "UNSUPPORTED"
+
+
+@dataclass(frozen=True)
+class PlannedRequirement:
+    category: EvidenceCategory
+    role: EvidenceRole
+    status: RequirementStatus
+    provider: str | None = None
+    endpoint: str | None = None
+    query: Query | None = None
+    missing: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class HybridClaimPlan:
+    requirements: tuple[PlannedRequirement, ...]
+    coverage: CoverageLevel
+
+    @property
+    def queries(self) -> tuple[Query, ...]:
+        return tuple(item.query for item in self.requirements if item.query is not None)
+
+    @property
+    def has_executable_primary(self) -> bool:
+        return any(
+            item.role is EvidenceRole.PRIMARY
+            and item.status is RequirementStatus.READY
+            and item.query is not None
+            for item in self.requirements
+        )
 
 
 def _single(text: str, options: dict[str, str]) -> tuple[str | None, bool]:
@@ -347,6 +394,193 @@ def plan_claim_queries(
     )
 
 
+def plan_baseline_queries(
+    *,
+    stock_code: str,
+    stock_name: str,
+    as_of: datetime,
+    id_factory: Callable[[], str],
+    clock: Callable[[], datetime],
+) -> tuple[Query, ...]:
+    """Build the review-level context plan; provider availability is an n6 concern."""
+    specifications = [
+        ("dart", "disclosure_list", {"stock_code": stock_code}),
+        (
+            "kiwoom",
+            "daily_price_history",
+            {
+                "stock_code": stock_code,
+                "base_date": as_of.strftime("%Y%m%d"),
+                "adjusted_price": POLICY_ADJUSTED_PRICE,
+            },
+        ),
+        (
+            "naver",
+            "news_search",
+            build_query_params(stock_code, stock_name)[0],
+        ),
+    ]
+    return tuple(
+        Query(
+            query_id=id_factory(),
+            scope="stock",
+            claim_id=None,
+            intent="context",
+            provider=provider,
+            endpoint=endpoint,
+            params=params,
+            created_at=clock(),
+        )
+        for provider, endpoint, params in specifications
+    )
+
+
+def _resolution_for_source(
+    source: EvidenceSourceRule,
+    category: EvidenceCategory,
+    text: str,
+    *,
+    stock_code: str,
+    stock_name: str,
+    as_of: datetime,
+    topic_terms: list[str],
+) -> ParameterResolution:
+    if source.provider == "naver":
+        topic = " ".join([stock_name, *topic_terms]).strip()
+        return ParameterResolution(
+            planned=((
+                "naver",
+                "news_search",
+                build_query_params(
+                    stock_code,
+                    stock_name,
+                    supplied_queries=[topic],
+                )[0],
+            ),)
+        )
+    if source.endpoint == "disclosure_list":
+        return ParameterResolution(planned=(("dart", source.endpoint, {"stock_code": stock_code}),))
+    if source.endpoint == "daily_price_history":
+        return resolve_parameters(
+            EvidenceNeed.MARKET_PRICE,
+            text,
+            stock_code=stock_code,
+            stock_name=stock_name,
+            as_of=as_of,
+        )
+    if source.endpoint == "investor_flow":
+        return resolve_parameters(
+            EvidenceNeed.INVESTOR_FLOW,
+            text,
+            stock_code=stock_code,
+            stock_name=stock_name,
+            as_of=as_of,
+        )
+    need = (
+        EvidenceNeed.FINANCIAL_STATEMENT
+        if source.endpoint == "financial_statement"
+        else EvidenceNeed.FINANCIAL_INDICATOR
+    )
+    resolution = resolve_parameters(
+        need,
+        text,
+        stock_code=stock_code,
+        stock_name=stock_name,
+        as_of=as_of,
+    )
+    if source.indicator_family is not None and resolution.missing == ("indicator_family",):
+        year, _ = _year(text)
+        if year is None:
+            return ParameterResolution(missing=("bsns_year",))
+        return ParameterResolution(
+            planned=((
+                "dart",
+                "financial_indicator",
+                {
+                    "stock_code": stock_code,
+                    "bsns_year": year,
+                    "reprt_code": POLICY_REPORT_CODE,
+                    "indicator_family": source.indicator_family,
+                },
+            ),),
+            policy_applied=("reprt_code",),
+        )
+    return resolution
+
+
+def plan_hybrid_claim(
+    claim: Claim,
+    intent_draft: EvidenceIntentDraft,
+    *,
+    stock_code: str,
+    stock_name: str,
+    as_of: datetime,
+    id_factory: Callable[[], str],
+    clock: Callable[[], datetime],
+) -> HybridClaimPlan:
+    policy = get_slot_definition(claim.slot_id).evidence_policy
+    primary_intent = "counter" if policy is EvidencePolicy.SYSTEM_OPPOSING_SEARCH else "verify"
+    planned: list[PlannedRequirement] = []
+    coverages: list[CoverageLevel] = []
+    for requirement in intent_draft.requirements:
+        rule = EVIDENCE_REQUIREMENT_REGISTRY[requirement.category]
+        coverages.append(rule.coverage)
+        has_primary = False
+        for source in rule.sources:
+            resolution = _resolution_for_source(
+                source,
+                requirement.category,
+                claim.normalized_proposition,
+                stock_code=stock_code,
+                stock_name=stock_name,
+                as_of=as_of,
+                topic_terms=list(requirement.topic_terms),
+            )
+            if source.role is EvidenceRole.PRIMARY:
+                has_primary = True
+            query = None
+            status = RequirementStatus.READY
+            if resolution.missing:
+                status = RequirementStatus.MISSING_USER_FACT
+            elif resolution.ready:
+                provider, endpoint, params = resolution.planned[0]
+                query = Query(
+                    query_id=id_factory(),
+                    scope="claim",
+                    claim_id=claim.claim_id,
+                    intent=(primary_intent if source.role is EvidenceRole.PRIMARY else "context"),
+                    provider=provider,
+                    endpoint=endpoint,
+                    params=params,
+                    created_at=clock(),
+                )
+            else:
+                status = RequirementStatus.SOURCE_UNAVAILABLE
+            planned.append(PlannedRequirement(
+                category=requirement.category,
+                role=source.role,
+                status=status,
+                provider=source.provider,
+                endpoint=source.endpoint,
+                query=query,
+                missing=resolution.missing,
+            ))
+        if not has_primary:
+            planned.append(PlannedRequirement(
+                category=requirement.category,
+                role=EvidenceRole.UNAVAILABLE,
+                status=RequirementStatus.SOURCE_UNAVAILABLE,
+            ))
+    coverage = (
+        CoverageLevel.SOURCE_LIMITED
+        if CoverageLevel.SOURCE_LIMITED in coverages
+        else CoverageLevel.PARTIAL
+        if CoverageLevel.PARTIAL in coverages
+        else CoverageLevel.FULL
+    )
+    return HybridClaimPlan(tuple(planned), coverage)
+
+
 __all__ = [
     "POLICY_ADJUSTED_PRICE",
     "POLICY_FS_DIV",
@@ -354,7 +588,12 @@ __all__ = [
     "POLICY_REPORT_CODE",
     "POLICY_UNIT",
     "ParameterResolution",
+    "HybridClaimPlan",
+    "PlannedRequirement",
+    "RequirementStatus",
     "missing_parameters",
+    "plan_baseline_queries",
     "plan_claim_queries",
+    "plan_hybrid_claim",
     "resolve_parameters",
 ]

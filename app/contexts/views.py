@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
+from app.domain.evidence_requirement import EvidenceCategory
 from app.schemas.frozen import (
     ULID,
     CitationRef,
@@ -45,6 +46,13 @@ class ClaimView(_ViewModel):
     normalized_proposition: NonBlankStr
 
 
+class EvidenceIntentView(_ViewModel):
+    claim_id: ULID
+    slot_id: SlotId
+    normalized_proposition: NonBlankStr
+    allowed_categories: list[EvidenceCategory]
+
+
 class EvidenceExcerptView(_ViewModel):
     evidence_id: ULID
     source_type: Literal["dart", "news", "quote"]
@@ -53,6 +61,7 @@ class EvidenceExcerptView(_ViewModel):
     published_at: AwareDatetime | None = None
     as_of: AwareDatetime
     raw_span: NonBlankStr = Field(max_length=500)
+    evidence_role: Literal["PRIMARY", "CORROBORATIVE"] | None = None
 
 
 class ClassifiedEvidenceView(EvidenceExcerptView):

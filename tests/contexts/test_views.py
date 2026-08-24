@@ -91,6 +91,7 @@ def test_EvidenceExcerptView는_획득_저장소_내부_필드가_없다():
         "published_at",
         "as_of",
         "raw_span",
+        "evidence_role",
     }
     assert not {"content_sha256", "provider_request_id", "fetched_at"} & set(
         EvidenceExcerptView.model_fields

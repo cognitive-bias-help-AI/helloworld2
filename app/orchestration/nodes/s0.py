@@ -24,6 +24,7 @@ from app.contexts.views import (
     ClaimView,
     ClassifiedEvidenceView,
     EvidenceExcerptView,
+    EvidenceIntentView,
     EvidencePacket,
     GuardBatchEnvelope,
     GuardScanView,
@@ -35,6 +36,7 @@ from app.contexts.views import (
 )
 from app.diagnostics import debug_log
 from app.domain.evidence_need import EvidenceNeed, classify_evidence_need
+from app.domain.evidence_requirement import EvidenceCategory, EvidenceRole
 from app.domain.intake import (
     FreeTextInput,
     HybridIntake,
@@ -49,13 +51,20 @@ from app.domain.stock_scope import evaluate_stock_scope
 from app.domain.text_safety import sanitize_user_text
 from app.gateway.evidence_gateway import GatewayBudgetExceeded, collect_evidence
 from app.orchestration.drafts import (
+    EvidenceIntentDraft,
+    EvidenceRequirementDraft,
     FindingDraft,
     GuardScanResult,
     GuardVerdictDraft,
     RenderDraft,
 )
+from app.orchestration.evidence_intent import validate_grounded_intent
 from app.orchestration.evidence_packing import fits_budget, pack_evidence
-from app.orchestration.evidence_planning import missing_parameters, plan_claim_queries
+from app.orchestration.evidence_planning import (
+    RequirementStatus,
+    plan_baseline_queries,
+    plan_hybrid_claim,
+)
 from app.orchestration.hitl import StockChoiceRequest, StockChoiceResume, select_stock
 from app.orchestration.intake_review_runtime import (
     HitlResumeEvent,
@@ -81,9 +90,11 @@ from app.orchestration.runtime import ReviewRequestContext, RuntimeDeps
 from app.orchestration.state import ReviewState
 from app.orchestration.validators.citations import validate_citations
 from app.schemas.frozen import (
+    PROVIDER_SOURCE_TYPE,
     CitationRef,
     ClaimEvaluationDraft,
     ClaimStanceDraft,
+    CollectionResult,
     GuardInput,
     NodeStatus,
     Query,
@@ -375,7 +386,7 @@ def make_nodes(deps: RuntimeDeps):
             if result.routing_outcome is not RoutingOutcome.NEEDS_HITL:
                 destination = {
                     RoutingOutcome.READY_FOR_EVIDENCE: "n5",
-                    RoutingOutcome.CONTEXT_ONLY: "n11",
+                    RoutingOutcome.CONTEXT_ONLY: "n5",
                     RoutingOutcome.BLOCKED: "n12",
                 }[result.routing_outcome]
                 ask_records = await deps.review_store.get_ask_records(state["run_id"])
@@ -471,28 +482,178 @@ def make_nodes(deps: RuntimeDeps):
                     f"n5:block:{ReasonCode.CONTRACT_VIOLATION.value}"
                 ]
             }
-        queries: list[Query] = []
+        as_of = datetime.fromisoformat(state["as_of"])
+        queries: list[Query] = list(plan_baseline_queries(
+            stock_code=stock["code"],
+            stock_name=stock["name"],
+            as_of=as_of,
+            id_factory=deps.id_factory,
+            clock=deps.clock,
+        ))
+        debug_log(
+            "n5",
+            "BASELINE",
+            **{
+                provider: "READY" if provider in deps.adapters else "UNAVAILABLE"
+                for provider in ("dart", "kiwoom", "naver")
+            },
+        )
+        relevant_claims = 0
+        planned_claims = 0
+        llm_calls = 0
+        source_limited_claims = 0
+        missing_user_fact_claims = 0
+        fallback_categories = {
+            EvidenceNeed.FINANCIAL_STATEMENT: EvidenceCategory.FINANCIAL_PERFORMANCE,
+            EvidenceNeed.DISCLOSURE: EvidenceCategory.DISCLOSURE_EVENT,
+            EvidenceNeed.NEWS: EvidenceCategory.NEWS_EVENT,
+            EvidenceNeed.MARKET_PRICE: EvidenceCategory.PRICE_MOVEMENT,
+            EvidenceNeed.INVESTOR_FLOW: EvidenceCategory.INVESTOR_FLOW,
+        }
         for claim in claims:
-            queries.extend(
-                plan_claim_queries(
-                    claim,
-                    stock_code=stock["code"],
-                    stock_name=stock["name"],
-                    as_of=datetime.fromisoformat(state["as_of"]),
-                    id_factory=deps.id_factory,
-                    clock=deps.clock,
+            if not claim.verifiable:
+                continue
+            relevant_claims += 1
+            need = classify_evidence_need(claim)
+            view = EvidenceIntentView(
+                claim_id=claim.claim_id,
+                slot_id=claim.slot_id,
+                normalized_proposition=claim.normalized_proposition,
+                allowed_categories=list(EvidenceCategory),
+            )
+            intent_draft = None
+            for _ in range(2):
+                try:
+                    candidate, _ = await _invoke(
+                        deps, "n5", "SMALL", view, EvidenceIntentDraft
+                    )
+                    llm_calls += 1
+                    intent_draft = validate_grounded_intent(
+                        candidate, claim.normalized_proposition
+                    )
+                    break
+                except (AssertionError, KeyError, RuntimeError, ValueError, ValidationError):
+                    llm_calls += 1
+            if intent_draft is None:
+                category = fallback_categories.get(need)
+                if need is EvidenceNeed.FINANCIAL_INDICATOR:
+                    text = claim.normalized_proposition
+                    category = (
+                        EvidenceCategory.PROFITABILITY
+                        if any(term in text for term in ("ROE", "ROA", "수익성"))
+                        else EvidenceCategory.FINANCIAL_STABILITY
+                        if any(term in text for term in ("부채비율", "안정성"))
+                        else EvidenceCategory.FINANCIAL_GROWTH
+                        if "성장성" in text
+                        else EvidenceCategory.OPERATING_EFFICIENCY
+                        if any(term in text for term in ("회전율", "활동성"))
+                        else None
+                    )
+                intent_draft = EvidenceIntentDraft(
+                    requirements=(
+                        [EvidenceRequirementDraft(category=category)]
+                        if category is not None
+                        else []
+                    )
                 )
+            debug_log(
+                "n5",
+                "EVIDENCE_INTENT",
+                claim_id=claim.claim_id,
+                categories=[item.category.value for item in intent_draft.requirements],
+            )
+            plan = plan_hybrid_claim(
+                claim,
+                intent_draft,
+                stock_code=stock["code"],
+                stock_name=stock["name"],
+                as_of=as_of,
+                id_factory=deps.id_factory,
+                clock=deps.clock,
+            )
+            queries.extend(plan.queries)
+            planned_claims += plan.has_executable_primary
+            source_limited_claims += any(
+                item.status is RequirementStatus.SOURCE_UNAVAILABLE
+                for item in plan.requirements
+            )
+            missing_user_fact_claims += any(
+                item.status is RequirementStatus.MISSING_USER_FACT
+                and item.role is EvidenceRole.PRIMARY
+                for item in plan.requirements
+            )
+            for item in plan.requirements:
+                debug_log(
+                    "n5",
+                    "REQUIREMENT_PLAN",
+                    claim_id=claim.claim_id,
+                    category=item.category.value,
+                    provider=item.provider,
+                    endpoint=item.endpoint,
+                    role=item.role.value,
+                    status=item.status.value,
+                    missing_parameters=list(item.missing),
+                )
+            debug_log(
+                "n5", "CLAIM_PLAN", claim_id=claim.claim_id,
+                evidence_need=need.value,
+                missing_parameters=sorted({value for item in plan.requirements for value in item.missing}),
+                query_count=len(plan.queries),
+                providers=sorted({item.provider for item in plan.queries}),
+                endpoints=sorted({item.endpoint for item in plan.queries}),
             )
         ids = await deps.evidence_store.put_queries(state["run_id"], queries)
-        return {"query_ids": ids, "node_results": ["n5:ok"]}
+        node_status = (
+            "ok"
+            if relevant_claims == 0 or planned_claims == relevant_claims
+            else "missing"
+            if planned_claims == 0
+            else "partial"
+        )
+        debug_log(
+            "n5", "SUMMARY", baseline_queries=3,
+            primary_queries=sum(q.scope == "claim" and q.intent in {"verify", "counter"} for q in queries),
+            corroborative_queries=sum(q.scope == "claim" and q.intent == "context" for q in queries),
+            source_limited_claims=source_limited_claims,
+            missing_user_fact_claims=missing_user_fact_claims,
+        )
+        patch = {"query_ids": ids, "node_results": [f"n5:{node_status}"]}
+        if llm_calls:
+            patch["counters"] = {"llm_calls": llm_calls}
+        return patch
 
     async def n6(state: ReviewState):
         queries = await deps.evidence_store.get_queries(state["query_ids"])
+        if not queries:
+            debug_log(
+                "n6",
+                "COLLECTION_SKIP",
+                reason="no_queries",
+                query_count=0,
+                external_calls=0,
+            )
+            return {
+                "collections": {},
+                "node_results": ["n6:missing"],
+                "counters": {"external_calls": 0},
+            }
+        unavailable = sorted({query.provider for query in queries if query.provider not in deps.adapters})
+        executable_queries = [query for query in queries if query.provider in deps.adapters]
+        provider_counts: dict[str, int] = {}
+        for query in queries:
+            provider_counts[query.provider] = provider_counts.get(query.provider, 0) + 1
+        debug_log(
+            "n6",
+            "COLLECTION_PLAN",
+            query_count=len(queries),
+            provider_counts=provider_counts,
+            unavailable_providers=unavailable,
+        )
         try:
             result = await collect_evidence(
                 run_id=state["run_id"],
                 as_of=datetime.fromisoformat(state["as_of"]),
-                queries=queries,
+                queries=executable_queries,
                 adapters=deps.adapters,
                 evidence_store=deps.evidence_store,
                 provider_admission=deps.provider_admission,
@@ -503,7 +664,15 @@ def make_nodes(deps: RuntimeDeps):
             )
         except GatewayBudgetExceeded:
             return {"node_results": [f"n6:block:{ReasonCode.BUDGET_EXCEEDED.value}"]}
-        statuses = {value["status"] for value in result.collections.values()}
+        collections = dict(result.collections)
+        for provider in unavailable:
+            collections[provider] = CollectionResult(
+                source=PROVIDER_SOURCE_TYPE[provider],
+                status=NodeStatus.MISSING,
+                reason_code=ReasonCode.EVIDENCE_INSUFFICIENT,
+                queries_run=0,
+            ).model_dump(mode="json")
+        statuses = {value["status"] for value in collections.values()}
         node_status = (
             "ok"
             if statuses <= {NodeStatus.OK.value}
@@ -511,8 +680,18 @@ def make_nodes(deps: RuntimeDeps):
             if statuses == {NodeStatus.MISSING.value}
             else "partial"
         )
+        debug_log(
+            "n6",
+            "COLLECTION_RESULT",
+            external_calls=result.external_calls,
+            collection_statuses=sorted(statuses),
+            evidence_count=sum(
+                int(value.get("items_adopted", 0))
+                for value in collections.values()
+            ),
+        )
         return {
-            "collections": result.collections,
+            "collections": collections,
             "node_results": [f"n6:{node_status}"],
             "counters": {"external_calls": result.external_calls},
         }
@@ -554,12 +733,26 @@ def make_nodes(deps: RuntimeDeps):
                 normalized_proposition=claim.normalized_proposition,
             )
 
-            def _packet(items, claim_view=claim_view):
+            def _packet(
+                items,
+                claim_view=claim_view,
+                query_ids_by_evidence=query_ids_by_evidence,
+                queries=queries,
+            ):
                 return EvidencePacket(
                     claim=claim_view,
                     evidence=[
                         EvidenceExcerptView(
-                            **item.model_dump(include=set(EvidenceExcerptView.model_fields))
+                            **item.model_dump(include=set(EvidenceExcerptView.model_fields)),
+                            evidence_role=(
+                                "PRIMARY"
+                                if any(
+                                    query.query_id in query_ids_by_evidence[item.evidence_id]
+                                    and query.intent in {"verify", "counter"}
+                                    for query in queries
+                                )
+                                else "CORROBORATIVE"
+                            ),
                         )
                         for item in items
                     ],
@@ -615,6 +808,15 @@ def make_nodes(deps: RuntimeDeps):
         evaluations = []
         llm_calls = 0
         truncated = False
+        queries = await deps.evidence_store.get_queries(state["query_ids"])
+        primary_query_ids = [
+            query.query_id
+            for query in queries
+            if query.scope == "claim" and query.intent in {"verify", "counter"}
+        ]
+        all_primary_evidence_ids = set(
+            await deps.evidence_store.evidence_ids_for_queries(primary_query_ids)
+        )
         for claim in await canonical_claims(state["claim_ids"]):
             if not claim.verifiable:
                 continue
@@ -661,6 +863,11 @@ def make_nodes(deps: RuntimeDeps):
                         ClassifiedEvidenceView(
                             **item.model_dump(include=set(EvidenceExcerptView.model_fields)),
                             stance=stance[item.evidence_id],
+                            evidence_role=(
+                                "PRIMARY"
+                                if item.evidence_id in all_primary_evidence_ids
+                                else "CORROBORATIVE"
+                            ),
                         )
                         for item in items
                     ],
@@ -682,7 +889,13 @@ def make_nodes(deps: RuntimeDeps):
                 llm_calls += 1
                 try:
                     assembled = assemble_claim_evaluation(
-                        candidate, claim.claim_id, evidence_ids, [], deps.id_factory(), deps.clock()
+                        candidate,
+                        claim.claim_id,
+                        evidence_ids,
+                        [],
+                        deps.id_factory(),
+                        deps.clock(),
+                        primary_evidence_ids=set(evidence_ids) & all_primary_evidence_ids,
                     )
                     break
                 except AssemblyError as exc:
@@ -722,31 +935,16 @@ def make_nodes(deps: RuntimeDeps):
                 ]
             }
         queries = await deps.evidence_store.get_queries(state["query_ids"])
-        queried_claim_ids = {
-            item.claim_id for item in queries if item.scope == "claim"
-        }
+        primary_evidence_ids = set(await deps.evidence_store.evidence_ids_for_queries([
+            item.query_id
+            for item in queries
+            if item.scope == "claim" and item.intent in {"verify", "counter"}
+        ]))
         deterministic_drafts = []
         evidence_backed = []
         for claim in claims:
             if not claim.verifiable:
                 continue
-            if claim.claim_id not in queried_claim_ids:
-                # 🔴 B1 — Query 가 없는 데는 두 가지 정당한 이유가 있다.
-                #      1) 무슨 근거가 필요한지 모른다            (need = UNKNOWN)
-                #      2) 무슨 근거인지는 아는데 값이 부족하다    (missing parameters)
-                #    2번을 계약 위반으로 보면 "삼성전자 영업이익이 증가했다"
-                #    처럼 연도를 말하지 않은 정상 입력이 run 을 통째로 막는다.
-                #    계약 위반은 **계획했어야 하는데 안 한 경우**만 남는다.
-                need = classify_evidence_need(claim)
-                planned_is_required = need is not EvidenceNeed.UNKNOWN and not missing_parameters(
-                    need, claim.normalized_proposition
-                )
-                if planned_is_required:
-                    return {
-                        "node_results": [
-                            f"n9:block:{ReasonCode.CONTRACT_VIOLATION.value}"
-                        ]
-                    }
             evaluation = evaluations_by_claim.get(claim.claim_id)
             if evaluation is None:
                 return {
@@ -757,7 +955,7 @@ def make_nodes(deps: RuntimeDeps):
             evidence_ids = await deps.evidence_store.evidence_ids_for_claim(
                 claim.claim_id
             )
-            if evidence_ids:
+            if set(evidence_ids) & primary_evidence_ids:
                 evidence_backed.append(evaluation)
             else:
                 deterministic_drafts.append(
@@ -895,7 +1093,8 @@ def make_nodes(deps: RuntimeDeps):
             ]
         )
         verdict, _ = await _invoke(deps, "n10", "LARGE", envelope, GuardVerdictDraft)
-        deps.render_candidates.review(state["run_id"], verdict.violations)
+        violations = [item.to_canonical() for item in verdict.violations]
+        deps.render_candidates.review(state["run_id"], violations)
         result = "pass" if not verdict.violations else "rewrite"
         if (
             verdict.violations

@@ -14,6 +14,7 @@ from app.orchestration.drafts import (
     SemanticExtractionDraft,
     SemanticUnitDraft,
     SlotExtractionDraft,
+    ViolationDraft,
 )
 from app.schemas.frozen import CitationRef, ReasonCode, Violation
 
@@ -30,7 +31,7 @@ def test_output_schema_6종은_최소_필드로_생성된다():
     )
     question = AskBackQuestionDraft(slot_id=1, question="어떤 기간을 말하나요?")
     citation = CitationRef(evidence_id=U1, span="근거")
-    violation = Violation(
+    violation = ViolationDraft(
         slot_no=1, rule_id="R1", kind="pattern", matched="사세요", span_offset=(0, 3)
     )
     rendered = RenderedSlotDraft(slot_no=1, text="검토 결과", citations=[citation])
@@ -189,6 +190,43 @@ def test_SemanticExtractionDraft_span_offset_schema는_MLAPI_array_items_형식�
     assert span_schema["minItems"] == 2
     assert span_schema["maxItems"] == 2
     assert "prefixItems" not in span_schema
+
+
+def test_GuardVerdictDraft_span_offset_schema는_MLAPI_array_items_형식이다():
+    schema = GuardVerdictDraft.model_json_schema()
+    span_schema = schema["$defs"]["ViolationDraft"]["properties"]["span_offset"]
+
+    assert span_schema == {
+        "type": "array",
+        "items": {"type": "integer"},
+        "minItems": 2,
+        "maxItems": 2,
+        "title": "Span Offset",
+    }
+    assert "prefixItems" not in span_schema
+
+
+def test_ViolationDraft는_wire_list를_tuple로_보존하고_canonical로_변환한다():
+    draft = ViolationDraft(
+        slot_no=1, rule_id="R1", kind="pattern", matched="사세요", span_offset=[0, 5]
+    )
+
+    assert draft.span_offset == (0, 5)
+    assert draft.to_canonical() == Violation(
+        slot_no=1, rule_id="R1", kind="pattern", matched="사세요", span_offset=(0, 5)
+    )
+
+
+@pytest.mark.parametrize("span_offset", [[-1, 5], [5, 5], [5, 2], [1], [1, 2, 3]])
+def test_ViolationDraft는_invalid_span_offset을_거부한다(span_offset):
+    with pytest.raises(ValidationError):
+        ViolationDraft(
+            slot_no=1,
+            rule_id="R1",
+            kind="pattern",
+            matched="사세요",
+            span_offset=span_offset,
+        )
 
 
 @pytest.mark.parametrize("span_offset", [[-1, 5], [5, 5], [5, 4], [1], [1, 2, 3]])

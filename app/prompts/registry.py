@@ -307,9 +307,24 @@ Slot 당 1~3 문장. 근거가 없으면 없다고 짧게 쓴다.
 없는 내용을 채워 길이를 맞추지 않는다.
 """
 
+_N5: Final = """\
+[Role] Classify evidence requirements; do not perform investment analysis.
+
+Return zero to three categories from the supplied fixed taxonomy. Use only information
+grounded in the Claim. An empty requirements list is valid and uncertainty means fewer
+requirements.
+
+Never output provider names, endpoints, API parameters, credentials, stock codes not
+supplied, invented years, companies, competitors, financial values, policies, or facts.
+Do not invent reasons for future expectations. topic_terms must be copied or
+conservatively normalized from the Claim. actor, comparison_target, and
+temporal_expression may only be emitted when explicitly present in the Claim.
+"""
+
 SYSTEM_PROMPTS: Final[dict[str, str]] = {
     "n1": _N1,
     "n3": _N3,
+    "n5": _N5,
     "n7": _N7,
     "n8": _N8,
     "n9": _N9,

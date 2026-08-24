@@ -13,7 +13,14 @@ from app.domain.intake import ResponseState
 from app.domain.slot_resolution import CurrentSlotProjection, CurrentSlotStatus
 from app.gateway.adapters.naver import NaverAdapter
 from app.gateway.admission import ProviderAdmissionController
-from app.orchestration.drafts import FindingDraft, RenderDraft, RenderedSlotDraft
+from app.gateway.evidence_gateway import GatewayResult
+from app.orchestration.drafts import (
+    FindingDraft,
+    GuardVerdictDraft,
+    RenderDraft,
+    RenderedSlotDraft,
+    ViolationDraft,
+)
 from app.orchestration.nodes.s0 import make_nodes
 from app.schemas.frozen import (
     CitationRef,
@@ -23,11 +30,13 @@ from app.schemas.frozen import (
     ClaimStanceDraft,
     Evidence,
     EvidenceQueryLink,
+    NodeStatus,
     ProviderCall,
     Query,
     ReasonCode,
     SourceTrace,
     Usage,
+    Violation,
 )
 from tests.s0.runtime_fixtures import NOW, FlowGateway, deps, initial_state
 
@@ -146,17 +155,19 @@ async def test_n5_filters_canonical_non_verifiable_claims_before_query_construct
     patch = await make_nodes(runtime_deps)["n5"](state)
     queries = await runtime_deps.evidence_store.get_queries(patch["query_ids"])
 
-    assert [item.claim_id for item in queries] == [a.claim_id, c.claim_id]
+    claim_queries = [item for item in queries if item.scope == "claim"]
+    assert [item.claim_id for item in claim_queries] == [a.claim_id, a.claim_id, c.claim_id, c.claim_id]
     assert all(
         item.provider == "dart"
         and item.endpoint == "disclosure_list"
         and item.params == {"stock_code": "005930"}
-        for item in queries
+        for item in claim_queries
+        if item.provider == "dart"
     )
     assert "NON_VERIFIABLE_SECRET" not in str([item.model_dump() for item in queries])
     assert await runtime_deps.review_store.get_claims(state["claim_ids"]) == before
     assert patch["node_results"] == ["n5:ok"]
-    assert runtime_deps.model_gateway.calls == []
+    assert [node for node, _ in runtime_deps.model_gateway.calls] == ["n5"] * 2
 
 
 @pytest.mark.asyncio
@@ -169,8 +180,9 @@ async def test_n5_same_slot_verifiable_claims는_각각_독립_Query를_만든�
     patch = await make_nodes(runtime_deps)["n5"](state)
     queries = await runtime_deps.evidence_store.get_queries(patch["query_ids"])
 
-    assert [item.claim_id for item in queries] == [demand.claim_id, supply.claim_id]
-    assert len({item.query_id for item in queries}) == 2
+    claim_queries = [item for item in queries if item.scope == "claim"]
+    assert {item.claim_id for item in claim_queries} == {demand.claim_id, supply.claim_id}
+    assert len({item.query_id for item in claim_queries}) == 4
 
 
 @pytest.mark.asyncio
@@ -182,13 +194,18 @@ async def test_n5_claim_dependent_text_slot은_NAVER_Query로_계획한다():
     patch = await make_nodes(runtime_deps)["n5"](state)
     queries = await runtime_deps.evidence_store.get_queries(patch["query_ids"])
 
-    assert len(queries) == 1
-    assert queries[0].provider == "naver"
-    assert queries[0].endpoint == "news_search"
-    assert queries[0].params == {
+    claim_queries = [item for item in queries if item.scope == "claim"]
+    assert len(claim_queries) == 2
+    assert {item.provider for item in claim_queries} == {"dart", "naver"}
+    primary_news = next(
+        query for query in claim_queries
+        if query.provider == "naver" and query.intent == "verify"
+    )
+    assert primary_news.endpoint == "news_search"
+    assert primary_news.params == {
         "stock_code": "005930",
         "stock_name": "삼성전자",
-        "query": "005930",
+        "query": "삼성전자",
         "display": 30,
         "sort": "date",
     }
@@ -229,8 +246,8 @@ async def test_n5_NAVER_Query는_Gateway에서_canonical_Evidence로_연결된�
             state["query_ids"]
         )
 
-        assert n6_patch["node_results"] == ["n6:ok"]
-        assert n6_patch["counters"] == {"external_calls": 1}
+        assert n6_patch["node_results"] == ["n6:partial"]
+        assert n6_patch["counters"] == {"external_calls": 2}
         assert len(evidence_ids) == 1
         stored = await runtime_deps.evidence_store.get_many(evidence_ids)
         assert stored[0].source_type == "news"
@@ -246,8 +263,11 @@ async def test_n5_all_false_returns_empty_query_ids_without_provider_candidate()
 
     patch = await make_nodes(runtime_deps)["n5"](state)
 
-    assert patch == {"query_ids": [], "node_results": ["n5:ok"]}
-    assert runtime_deps.evidence_store._queries == {}
+    queries = await runtime_deps.evidence_store.get_queries(patch["query_ids"])
+    assert len(queries) == 3
+    assert all(item.scope == "stock" for item in queries)
+    assert patch["node_results"] == ["n5:ok"]
+    assert len(runtime_deps.evidence_store._queries) == 3
 
 
 @pytest.mark.asyncio
@@ -258,8 +278,150 @@ async def test_n5_unknown_evidence_need는_provider를_추측하지_않는다():
 
     patch = await make_nodes(runtime_deps)["n5"](state)
 
-    assert patch == {"query_ids": [], "node_results": ["n5:ok"]}
-    assert runtime_deps.evidence_store._queries == {}
+    queries = await runtime_deps.evidence_store.get_queries(patch["query_ids"])
+    assert len(queries) == 3
+    assert all(item.scope == "stock" for item in queries)
+    assert patch["node_results"] == ["n5:missing"]
+    assert len(runtime_deps.evidence_store._queries) == 3
+
+
+@pytest.mark.asyncio
+async def test_n5_price_financial_mixed_claim의_planning_status와_safe_diagnostics(
+    monkeypatch, capsys
+):
+    monkeypatch.setenv("REVIEW_DEBUG_LOGS", "1")
+    cases = [
+        ([claim(31, verifiable=True, proposition="주가가 상승했다")], "n5:ok", 5),
+        ([claim(32, verifiable=True, proposition="영업이익이 증가했다")], "n5:missing", 4),
+        (
+            [
+                claim(33, verifiable=True, proposition="주가가 상승했다"),
+                claim(34, verifiable=True, proposition="영업이익이 증가했다"),
+            ],
+            "n5:partial",
+                6,
+        ),
+    ]
+    for claims, node_result, query_count in cases:
+        runtime_deps = deps()
+        state = await seed_claims(runtime_deps, claims)
+        patch = await make_nodes(runtime_deps)["n5"](state)
+        assert patch["node_results"] == [node_result]
+        assert len(patch["query_ids"]) == query_count
+
+    stderr = capsys.readouterr().err
+    assert "CLAIM_PLAN" in stderr
+    assert 'evidence_need="MARKET_PRICE"' in stderr
+    assert 'evidence_need="FINANCIAL_STATEMENT"' in stderr
+    assert 'missing_parameters=["bsns_year"]' in stderr
+    assert "영업이익이 증가했다" not in stderr
+
+
+@pytest.mark.asyncio
+async def test_n6_zero_queries는_gateway를_호출하지_않고_missing이다(monkeypatch, capsys):
+    monkeypatch.setenv("REVIEW_DEBUG_LOGS", "1")
+
+    async def forbidden(**kwargs):
+        raise AssertionError("collect_evidence must not be called")
+
+    monkeypatch.setattr(nodes_module, "collect_evidence", forbidden)
+    runtime_deps = deps()
+    state = initial_state() | {"query_ids": []}
+
+    patch = await make_nodes(runtime_deps)["n6"](state)
+
+    assert patch == {
+        "collections": {},
+        "node_results": ["n6:missing"],
+        "counters": {"external_calls": 0},
+    }
+    assert "COLLECTION_SKIP" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("statuses", "expected"),
+    [
+        ([NodeStatus.OK.value], "n6:ok"),
+        ([NodeStatus.MISSING.value], "n6:missing"),
+        ([NodeStatus.OK.value, NodeStatus.MISSING.value], "n6:partial"),
+    ],
+)
+async def test_n6_nonempty_collection_status는_empty_set_vacuous_success를_쓰지_않는다(
+    monkeypatch, statuses, expected
+):
+    async def fake_collect(**kwargs):
+        return GatewayResult(
+            collections={f"provider-{i}": {"status": status} for i, status in enumerate(statuses)},
+            external_calls=len(statuses),
+            provider_calls=(),
+            failures=(),
+        )
+
+    monkeypatch.setattr(nodes_module, "collect_evidence", fake_collect)
+    runtime_deps = deps()
+    item = claim(40, verifiable=True)
+    state = initial_state() | {"query_ids": [query(40, item.claim_id).query_id]}
+    await runtime_deps.evidence_store.put_queries("run-s0", [query(40, item.claim_id)])
+
+    patch = await make_nodes(runtime_deps)["n6"](state)
+
+    assert patch["node_results"] == [expected]
+
+
+@pytest.mark.asyncio
+async def test_n8_unverifiable_fallback은_runtime_ULID_factory로_canonical_evaluation을_만든다():
+    from app.runtime.ids import generate_ulid
+
+    runtime_deps = replace(deps(), id_factory=generate_ulid)
+    item = claim(50, verifiable=True, proposition="영업이익이 증가했다")
+    state = await seed_claims(runtime_deps, [item])
+
+    patch = await make_nodes(runtime_deps)["n8"](state)
+    stored = await runtime_deps.review_store.get_claim_evaluations(
+        patch["claim_evaluation_ids"]
+    )
+
+    assert len(stored) == 1
+    assert stored[0].claim_id == item.claim_id
+
+
+@pytest.mark.asyncio
+async def test_n10은_wire_ViolationDraft를_frozen_Violation으로_변환한다():
+    class GuardGateway(FlowGateway):
+        async def invoke(self, slot, prompt_version, input_view, output_schema):
+            if output_schema is GuardVerdictDraft:
+                return GuardVerdictDraft(
+                    violations=[
+                        ViolationDraft(
+                            slot_no=1,
+                            rule_id="R1",
+                            kind="pattern",
+                            matched="사세요",
+                            span_offset=[0, 3],
+                        )
+                    ]
+                ), Usage(
+                    model_slot=slot,
+                    prompt_tokens=0,
+                    output_tokens=0,
+                    ctx_chars=0,
+                )
+            return await super().invoke(slot, prompt_version, input_view, output_schema)
+
+    runtime_deps = deps(gateway=GuardGateway())
+    runtime_deps.render_candidates.put(
+        "run-s0",
+        RenderDraft(slots=[RenderedSlotDraft(slot_no=1, text="사세요", citations=[])]),
+    )
+
+    patch = await make_nodes(runtime_deps)["n10"](initial_state())
+
+    assert patch["node_results"] == ["n10:rewrite"]
+    feedback = runtime_deps.render_candidates.get("run-s0").guard_feedback
+    assert len(feedback) == 1
+    assert isinstance(feedback[0], Violation)
+    assert feedback[0].span_offset == (0, 3)
 
 
 @pytest.mark.asyncio
@@ -621,10 +783,10 @@ async def test_counter_news_network_free_vertical_reaches_verified_oppose_block(
         n5_patch = await make_nodes(runtime_deps)["n5"](state)
         state["query_ids"] = n5_patch["query_ids"]
         planned = await runtime_deps.evidence_store.get_queries(state["query_ids"])
-        assert planned[0].intent == "counter"
+        assert any(item.scope == "claim" and item.intent == "counter" for item in planned)
 
         n6_patch = await make_nodes(runtime_deps)["n6"](state)
-        assert n6_patch["node_results"] == ["n6:ok"]
+        assert n6_patch["node_results"] == ["n6:partial"]
         assert (
             len(await runtime_deps.evidence_store.evidence_ids_for_queries(state["query_ids"])) == 1
         )
@@ -639,7 +801,7 @@ async def test_counter_news_network_free_vertical_reaches_verified_oppose_block(
 
         assert n9_patch["oppose"]["status"] == "verified"
         assert n9_patch["oppose"]["count"] == 1
-        assert n9_patch["oppose"]["queries"] == ["005930"]
+        assert n9_patch["oppose"]["queries"] == ["삼성전자"]
         integration_view = next(
             view for node, view in runtime_deps.model_gateway.calls if node == "n9"
         )

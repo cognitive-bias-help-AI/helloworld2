@@ -151,8 +151,8 @@ async def test_input_insufficient와_명시적_무응답은_context_only_report�
     assert "n2:ok" in result["node_results"]
     assert "intake_review:context_only" in result["node_results"]
     assert result["claim_ids"] == []
-    assert result["query_ids"] == []
-    assert result["collections"] == {}
+    assert len(result["query_ids"]) == 3
+    assert set(result["collections"]) == {"dart", "kiwoom", "naver"}
     assert result["report_id"]
     assert await runtime_deps.review_store.get_report(result["report_id"]) is not None
 

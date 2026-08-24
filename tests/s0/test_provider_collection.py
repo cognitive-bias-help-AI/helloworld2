@@ -94,8 +94,11 @@ async def test_n6_mixed_providers_aggregate_independently():
 
 @pytest.mark.asyncio
 async def test_n6_missing_adapter_fails_closed():
-    with pytest.raises(RuntimeError, match=ReasonCode.CONTRACT_VIOLATION.value):
-        await run_n6(["kiwoom"], adapters={"dart": MockAdapter("dart")})
+    patch = await run_n6(["kiwoom"], adapters={"dart": MockAdapter("dart")})
+    assert patch["node_results"] == ["n6:missing"]
+    assert patch["collections"]["kiwoom"]["status"] == "MISSING"
+    assert patch["collections"]["kiwoom"]["queries_run"] == 0
+    assert patch["counters"] == {"external_calls": 0}
 
 
 @pytest.mark.asyncio

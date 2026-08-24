@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app.contexts.views import (
     AskBackContext,
+    EvidenceIntentView,
     EvidencePacket,
     GuardBatchEnvelope,
     GuardScanView,
@@ -31,6 +32,7 @@ NODE_BUDGETS: Final[dict[str, ContextBudget]] = {
     "n1": ContextBudget(None, 2000),
     "n3": ContextBudget(8, 6000),
     "n4": ContextBudget(2, 1500),
+    "n5": ContextBudget(18, 3000),
     "n7": ContextBudget(12, 4000),
     "n8": ContextBudget(12, 4500),
     "n9": ContextBudget(8, 5000),
@@ -60,6 +62,8 @@ def ctx_items(view: BaseModel) -> int:
         return len(view.segments)
     if isinstance(view, AskBackContext):
         return len(view.missing_slots)
+    if isinstance(view, EvidenceIntentView):
+        return len(view.allowed_categories)
     if isinstance(view, EvidencePacket | VerifyPacket):
         return len(view.evidence)
     if isinstance(view, IntegrationView):

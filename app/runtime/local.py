@@ -35,7 +35,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import anthropic
 import httpx
@@ -62,6 +61,7 @@ from app.orchestration.checkpoint import MeasuringInMemorySaver
 from app.orchestration.graph import build_graph
 from app.orchestration.reporting import RenderCandidateStore
 from app.orchestration.runtime import RuntimeDeps
+from app.runtime.ids import generate_ulid
 from app.schemas.frozen import ModelSpec
 from app.store.memory_evidence_store import MemoryEvidenceStore
 from app.store.memory_review_store import MemoryReviewStore
@@ -265,7 +265,7 @@ async def compose_local_runtime(
             stock_resolver=stock_resolver,
             adapters=adapters,
             clock=lambda: datetime.now(UTC),
-            id_factory=lambda: uuid4().hex[:26].upper(),
+            id_factory=generate_ulid,
             render_candidates=RenderCandidateStore(),
         )
         yield LocalRuntime(

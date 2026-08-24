@@ -4,11 +4,13 @@ import os
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 from app.domain.stock_master import StockMasterResolver, write_stock_master_atomic
 from app.models.anthropic_gateway import AnthropicModelGateway
 from app.models.mlapi_gateway import MlApiModelGateway
 from app.orchestration.state import ReviewState
+from app.runtime.ids import generate_ulid
 from app.runtime.local import (
     DEFAULT_DIRECTORY,
     _capacities,
@@ -16,6 +18,7 @@ from app.runtime.local import (
     initial_state,
     load_dotenv,
 )
+from app.schemas.frozen import ULID
 from tests.domain.test_stock_master import snapshot
 
 
@@ -233,6 +236,8 @@ async def test_default_runtime은_KRX_snapshot을_resolver_authority로_사용�
     ) as runtime:
         assert isinstance(runtime.deps.stock_resolver, StockMasterResolver)
         assert runtime.deps.stock_resolver.resolve("삼전")[0].code == "005930"
+        assert runtime.deps.id_factory is generate_ulid
+        TypeAdapter(ULID).validate_python(runtime.deps.id_factory())
 
 
 @pytest.mark.asyncio
