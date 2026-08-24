@@ -15,6 +15,7 @@ from app.assemblers.semantic_extraction import (
 )
 from app.contexts.budget import validate_context_budget
 from app.contexts.views import SemanticExtractionView, SemanticSegmentView
+from app.diagnostics import debug_log
 from app.domain.ask_history import (
     AskRecord,
     build_ask_record,
@@ -162,9 +163,10 @@ async def _invoke_and_assemble(
     completed_attempts = 0
     while True:
         completed_attempts += 1
+        prompt_version = "n3/v2" if completed_attempts == 1 else "n3/v2/corrective"
         try:
             draft, _ = await model_gateway.invoke(
-                "SMALL", "n3/v2", view, SemanticExtractionDraft
+                "SMALL", prompt_version, view, SemanticExtractionDraft
             )
         except Exception:
             decision = classify_model_failure(
@@ -193,6 +195,11 @@ async def _invoke_and_assemble(
                 run_started_at=run_started_at,
             )
         except SemanticAssemblyError as exc:
+            debug_log(
+                "n3", "ASSEMBLY_REJECT", category=exc.category,
+                slot_id=exc.slot_id, semantic_kind=exc.semantic_kind,
+                segment_id=exc.segment_id, attempt=completed_attempts,
+            )
             decision = classify_model_failure(
                 ModelFailure(
                     cause=ModelFailureCause.SEMANTIC_ASSEMBLY_ERROR,

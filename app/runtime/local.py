@@ -39,6 +39,7 @@ from typing import Any
 import anthropic
 import httpx
 
+from app.diagnostics import debug_log
 from app.domain.stock_directory import CsvStockDirectory
 from app.domain.stock_master import (
     StockMasterResolver,
@@ -155,14 +156,26 @@ def _adapters(
         missing.append("dart")
         notes.append("DART_API_KEY 없음 - 재무·공시 근거 수집 불가")
 
-    kiwoom_key = _env("KIWOOM_APP_KEY")
-    kiwoom_secret = _env("KIWOOM_APP_SECRET")
+    kiwoom_environment_name = os.environ.get("KIWOOM_ENV")
+    if kiwoom_environment_name is None:
+        missing.append("kiwoom")
+        notes.append("KIWOOM_ENV 없음 - 키움 upstream 환경과 자격증명 미설정")
+        return adapters, missing, notes
+    try:
+        environment = KiwoomEnvironment(kiwoom_environment_name.strip().lower())
+    except ValueError as exc:
+        raise RuntimeError("KIWOOM_ENV must be 'mock' or 'production'") from exc
+    prefix = "MOCK" if environment is KiwoomEnvironment.MOCK else "PROD"
+    key_name = f"KIWOOM_{prefix}_APP_KEY"
+    secret_name = f"KIWOOM_{prefix}_APP_SECRET"
+    kiwoom_key = _env(key_name)
+    kiwoom_secret = _env(secret_name)
+    if not kiwoom_key:
+        raise RuntimeError(f"{key_name} is required when KIWOOM_ENV={environment.value}")
+    if not kiwoom_secret:
+        raise RuntimeError(f"{secret_name} is required when KIWOOM_ENV={environment.value}")
+    debug_log("config", "KIWOOM", environment=environment.value)
     if kiwoom_key and kiwoom_secret:
-        environment = (
-            KiwoomEnvironment.PRODUCTION
-            if _env("APP_ENV") == "production"
-            else KiwoomEnvironment.MOCK
-        )
         adapters["kiwoom"] = KiwoomAdapter(
             KiwoomCoreAdapter(
                 client,
@@ -170,9 +183,6 @@ def _adapters(
             ),
             environment=environment,
         )
-    else:
-        missing.append("kiwoom")
-        notes.append("KIWOOM_APP_KEY / KIWOOM_APP_SECRET 없음 - 시세·수급 근거 수집 불가")
 
     return adapters, missing, notes
 

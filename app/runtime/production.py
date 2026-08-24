@@ -10,8 +10,9 @@ from typing import Any
 
 import asyncpg
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
+from app.diagnostics import debug_log
 from app.domain.protocols import StockResolver
 from app.gateway.adapters.dart import DartAdapter
 from app.gateway.adapters.kiwoom import KiwoomAdapter
@@ -64,8 +65,22 @@ class ProductionSettings(BaseModel):
     dart_api_key: SecretStr = Field(alias="DART_API_KEY", min_length=1)
     naver_client_id: SecretStr = Field(alias="NAVER_CLIENT_ID", min_length=1)
     naver_client_secret: SecretStr = Field(alias="NAVER_CLIENT_SECRET", min_length=1)
-    kiwoom_app_key: SecretStr = Field(alias="KIWOOM_APP_KEY", min_length=1)
-    kiwoom_app_secret: SecretStr = Field(alias="KIWOOM_APP_SECRET", min_length=1)
+    kiwoom_env: KiwoomEnvironment = Field(
+        default=KiwoomEnvironment.MOCK, alias="KIWOOM_ENV"
+    )
+    kiwoom_mock_app_key: SecretStr | None = Field(default=None, alias="KIWOOM_MOCK_APP_KEY")
+    kiwoom_mock_app_secret: SecretStr | None = Field(default=None, alias="KIWOOM_MOCK_APP_SECRET")
+    kiwoom_prod_app_key: SecretStr | None = Field(default=None, alias="KIWOOM_PROD_APP_KEY")
+    kiwoom_prod_app_secret: SecretStr | None = Field(default=None, alias="KIWOOM_PROD_APP_SECRET")
+
+    @model_validator(mode="after")
+    def require_selected_kiwoom_credentials(self):
+        if self.kiwoom_env is KiwoomEnvironment.MOCK:
+            if self.kiwoom_mock_app_key is None or self.kiwoom_mock_app_secret is None:
+                raise ValueError("KIWOOM_MOCK_APP_KEY and KIWOOM_MOCK_APP_SECRET are required")
+        elif self.kiwoom_prod_app_key is None or self.kiwoom_prod_app_secret is None:
+            raise ValueError("KIWOOM_PROD_APP_KEY and KIWOOM_PROD_APP_SECRET are required")
+        return self
 
     @classmethod
     def from_environment(
@@ -82,8 +97,11 @@ class ProductionSettings(BaseModel):
             "DART_API_KEY",
             "NAVER_CLIENT_ID",
             "NAVER_CLIENT_SECRET",
-            "KIWOOM_APP_KEY",
-            "KIWOOM_APP_SECRET",
+            "KIWOOM_ENV",
+            "KIWOOM_MOCK_APP_KEY",
+            "KIWOOM_MOCK_APP_SECRET",
+            "KIWOOM_PROD_APP_KEY",
+            "KIWOOM_PROD_APP_SECRET",
         )
         return cls.model_validate({key: source[key] for key in keys if key in source})
 
@@ -138,11 +156,15 @@ async def compose_production_runtime(
     )
     client = _http_client_factory()
     try:
-        kiwoom_environment = (
-            KiwoomEnvironment.PRODUCTION
-            if settings.app_env is ApplicationEnvironment.PRODUCTION
-            else KiwoomEnvironment.MOCK
-        )
+        kiwoom_environment = settings.kiwoom_env
+        if kiwoom_environment is KiwoomEnvironment.MOCK:
+            kiwoom_key = settings.kiwoom_mock_app_key
+            kiwoom_secret = settings.kiwoom_mock_app_secret
+        else:
+            kiwoom_key = settings.kiwoom_prod_app_key
+            kiwoom_secret = settings.kiwoom_prod_app_secret
+        assert kiwoom_key is not None and kiwoom_secret is not None
+        debug_log("config", "KIWOOM", environment=kiwoom_environment.value)
         adapters = {
             "dart": DartAdapter(
                 settings.dart_api_key.get_secret_value(),
@@ -158,8 +180,8 @@ async def compose_production_runtime(
                 KiwoomCoreAdapter(
                     client,
                     KiwoomCredentials(
-                        app_key=settings.kiwoom_app_key.get_secret_value(),
-                        secret_key=settings.kiwoom_app_secret.get_secret_value(),
+                        app_key=kiwoom_key.get_secret_value(),
+                        secret_key=kiwoom_secret.get_secret_value(),
                     ),
                 ),
                 environment=kiwoom_environment,

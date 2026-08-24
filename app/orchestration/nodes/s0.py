@@ -1245,11 +1245,14 @@ def make_nodes(deps: RuntimeDeps):
             try:
                 result = await node(*args, **kwargs)
             except BaseException as error:
-                debug_log(
-                    "graph", "FAIL", node=name,
-                    exception_type=type(error).__name__, exception_message=str(error),
-                    elapsed_ms=round((perf_counter() - started) * 1000, 1),
-                )
+                event = "INTERRUPT" if type(error).__name__ == "GraphInterrupt" else "FAIL"
+                fields = {
+                    "node": name,
+                    "exception_type": type(error).__name__,
+                    "error_code": getattr(error, "category", None),
+                    "elapsed_ms": round((perf_counter() - started) * 1000, 1),
+                }
+                debug_log("graph", event, **fields)
                 raise
             node_results = result.get("node_results", []) if isinstance(result, dict) else []
             semantic_result = node_results[-1] if node_results else None

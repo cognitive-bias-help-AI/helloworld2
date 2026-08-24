@@ -265,7 +265,8 @@ async def _stdio_main() -> None:
             "MODEL_BACKEND", "ANTHROPIC_API_KEY", "LUNA_API_URL", "LUNA_API_KEY",
             "TERRA_API_URL", "TERRA_API_KEY", "SOL_API_URL", "SOL_API_KEY",
             "DART_API_KEY", "NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET",
-            "KIWOOM_APP_KEY", "KIWOOM_APP_SECRET", "DATABASE_URL",
+            "KIWOOM_ENV", "KIWOOM_MOCK_APP_KEY", "KIWOOM_MOCK_APP_SECRET",
+            "KIWOOM_PROD_APP_KEY", "KIWOOM_PROD_APP_SECRET", "DATABASE_URL",
         )
         debug_log("config", "presence", **{name: "SET" if os.getenv(name) else "UNSET" for name in names})
 

@@ -21,8 +21,9 @@ def valid_environment() -> dict[str, str]:
         "DART_API_KEY": "super-secret-dart-key",
         "NAVER_CLIENT_ID": "super-secret-naver-id",
         "NAVER_CLIENT_SECRET": "super-secret-naver-secret",
-        "KIWOOM_APP_KEY": "super-secret-kiwoom-key",
-        "KIWOOM_APP_SECRET": "super-secret-kiwoom-secret",
+        "KIWOOM_ENV": "production",
+        "KIWOOM_PROD_APP_KEY": "super-secret-kiwoom-key",
+        "KIWOOM_PROD_APP_SECRET": "super-secret-kiwoom-secret",
     }
 
 
@@ -113,6 +114,20 @@ def test_settings_read_typed_process_environment_and_mask_secrets():
             assert secret not in rendered
 
 
+def test_kiwoom_environment_is_not_derived_from_app_environment():
+    ProductionSettings, _ = bootstrap_api()
+    values = valid_environment() | {
+        "APP_ENV": "development",
+        "KIWOOM_ENV": "mock",
+        "KIWOOM_MOCK_APP_KEY": "super-secret-mock-key",
+        "KIWOOM_MOCK_APP_SECRET": "super-secret-mock-secret",
+    }
+    settings = ProductionSettings.from_environment(values)
+
+    assert settings.app_env.value == "development"
+    assert settings.kiwoom_env.value == "mock"
+
+
 def test_settings_read_from_process_environment(monkeypatch):
     ProductionSettings, _ = bootstrap_api()
     for key, value in valid_environment().items():
@@ -133,8 +148,8 @@ def test_settings_read_from_process_environment(monkeypatch):
         ("DART_API_KEY", None),
         ("NAVER_CLIENT_ID", None),
         ("NAVER_CLIENT_SECRET", None),
-        ("KIWOOM_APP_KEY", None),
-        ("KIWOOM_APP_SECRET", None),
+        ("KIWOOM_PROD_APP_KEY", None),
+        ("KIWOOM_PROD_APP_SECRET", None),
     ],
 )
 def test_settings_fail_fast_for_invalid_or_missing_required_values(key, value):

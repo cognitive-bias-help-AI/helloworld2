@@ -108,10 +108,18 @@ class SemanticAssemblyError(ValueError):
         family: SemanticErrorFamily = "contract",
         retryable: bool = False,
         detail: str = "",
+        slot_id: int | None = None,
+        semantic_kind: SemanticKind | str | None = None,
+        segment_id: str | None = None,
     ) -> None:
         self.category = category
         self.family = family
         self.retryable = retryable
+        self.slot_id = slot_id
+        self.semantic_kind = (
+            semantic_kind.value if isinstance(semantic_kind, SemanticKind) else semantic_kind
+        )
+        self.segment_id = segment_id
         super().__init__(detail or category)
 
 
@@ -140,9 +148,13 @@ def _error(
     family: SemanticErrorFamily = "contract",
     retryable: bool = False,
     detail: str = "",
+    slot_id: int | None = None,
+    semantic_kind: SemanticKind | str | None = None,
+    segment_id: str | None = None,
 ) -> SemanticAssemblyError:
     return SemanticAssemblyError(
-        category, family=family, retryable=retryable, detail=detail
+        category, family=family, retryable=retryable, detail=detail,
+        slot_id=slot_id, semantic_kind=semantic_kind, segment_id=segment_id,
     )
 
 
@@ -348,7 +360,11 @@ def assemble_semantic_extraction(
 
         eligibility = evaluate_claim_eligibility(item.slot_id, item.semantic_kind)
         if eligibility.reason == "incompatible_slot_kind":
-            raise _error("incompatible_slot_kind", retryable=True)
+            raise _error(
+                "incompatible_slot_kind", retryable=True,
+                slot_id=item.slot_id, semantic_kind=item.semantic_kind,
+                segment_id=item.segment_id,
+            )
         _validate_proposed_value(item)
         if item.semantic_kind in _EXTERNAL_KINDS:
             if (

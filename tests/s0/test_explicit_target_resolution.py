@@ -199,6 +199,35 @@ async def test_frontend_name_intake_projects_through_n0_and_resolves_at_n2():
 
 
 @pytest.mark.asyncio
+async def test_graph_interrupt_is_logged_as_interrupt_not_failure(monkeypatch, capsys):
+    monkeypatch.setenv("REVIEW_DEBUG_LOGS", "1")
+    import app.orchestration.nodes.s0 as s0_module
+
+    class GraphInterrupt(Exception):
+        pass
+
+    def raise_interrupt(_payload):
+        raise GraphInterrupt()
+
+    monkeypatch.setattr(s0_module, "interrupt", raise_interrupt)
+    candidates = [
+        StockCandidate(code="005930", name="삼성전자", market="KOSPI", match_kind="exact_name", score=1.0),
+        StockCandidate(code="005935", name="삼성전자우", market="KOSPI", match_kind="prefix", score=0.8),
+    ]
+    resolver = FixtureStockResolver({"삼성전자": candidates}, {})
+    runtime_deps = deps(resolver=resolver)
+    input_id = await runtime_deps.review_store.put_input("run-s0", target_body(selected_code=None))
+
+    with pytest.raises(BaseException) as raised:
+        await make_nodes(runtime_deps)["n2"](initial_state() | {"input_id": input_id})
+
+    assert type(raised.value).__name__ == "GraphInterrupt"
+    diagnostic = capsys.readouterr().err
+    assert '[graph] INTERRUPT' in diagnostic
+    assert '[graph] FAIL' not in diagnostic
+
+
+@pytest.mark.asyncio
 async def test_duplicate_or_wrong_code_exact_results_are_contract_violations_without_hitl():
     resolver = FixtureStockResolver(
         {}, {"005930": [instrument(), instrument(name="삼성전자 canonical duplicate")]}

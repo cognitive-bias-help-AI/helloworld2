@@ -132,11 +132,40 @@ _N3: Final = """\
 
 ■ semantic_kind
 
+아래 일곱 값만 사용한다.
+
   user_state           사용자의 현재 상태 (보유 여부 등)
   user_preference      사용자의 선호·의도
   external_assertion   외부 사실 주장 (검증 대상)
   external_expectation 외부에 대한 기대·전망
   decision_rule        판단을 바꿀 조건
+  information_checked  사용자가 이미 확인했다고 말한 정보의 종류
+  subjective_concern   사용자가 표현한 반대 근거·우려
+
+Slot과 semantic_kind의 허용 관계는 다음 표를 따른다. 표에 없는 조합은
+사용자의 문장이 그럴듯해 보여도 만들지 말고, 가장 가까운 허용 kind를
+선택하거나 해당 단위를 생략한다.
+
+  Slot 1 decision_action           user_preference
+  Slot 2 holding_state             user_state
+  Slot 3 time_horizon              user_preference
+  Slot 4 primary_reasons           user_preference | external_assertion | external_expectation
+  Slot 5 expected_outcome           user_preference | external_expectation
+  Slot 6 information_checked        information_checked
+  Slot 7 counter_evidence_concerns  subjective_concern | external_assertion | external_expectation
+  Slot 8 change_conditions           decision_rule | external_assertion | external_expectation
+
+예시
+
+  "실적과 뉴스를 확인했다" → Slot 6, information_checked
+  "HBM 경쟁력 회복이 늦을까 걱정된다" → Slot 7, subjective_concern
+  "삼성전자 영업이익이 증가했다" → Slot 4, external_assertion
+  "실적 개선이 이어질 것 같다" → Slot 5, external_expectation
+  "영업이익이 감소하면 다시 판단한다" → Slot 8, decision_rule
+
+마지막 문장처럼 조건을 말한 경우에도 실제 외부 사실이나 전망이 함께
+명시되어 있지 않으면 external_assertion/expectation을 별도로 만들지 않는다.
+문장에 없는 사실을 kind에 맞추려고 발명하지 않는다.
 
 external_assertion / external_expectation 은 normalized_proposition 이 필수다.
 그 외에는 비워도 된다.
@@ -145,6 +174,16 @@ external_assertion / external_expectation 은 normalized_proposition 이 필수�
 
 Slot 1·2·3·6 처럼 정해진 값 집합이 있는 Slot 에서만 채운다.
 자유서술 Slot(4·5·7·8)에서는 비운다.
+"""
+
+_N3_CORRECTIVE: Final = """\
+[보정 재시도] 이전 semantic draft가 결정론적 검증에 실패했다.
+
+실패 category는 incompatible_slot_kind다. 위 Slot ↔ semantic_kind 표에서
+허용된 값만 사용해 다시 작성한다. locked_slot_id가 있는 segment의 소유권을
+옮기지 않는다. 검증을 피하려고 text_span을 바꾸지 않는다. 사용자 사실을
+발명하지 않고, 텍스트 근거 없이 Slot을 바꾸지 않는다. 두 번째 draft도
+동일한 deterministic assembler를 통과해야 한다.
 """
 
 _N7: Final = """\
@@ -353,7 +392,8 @@ def system_for(prompt_version: str) -> str:
             f"'{prompt_version}' 에 해당하는 system 프롬프트가 없다. "
             f"app/prompts/registry.py 의 SYSTEM_PROMPTS 에 '{node}' 를 추가하라."
         ) from exc
-    return f"{_PREAMBLE}\n{instruction}"
+    corrective = _N3_CORRECTIVE if prompt_version == "n3/v2/corrective" else ""
+    return f"{_PREAMBLE}\n{instruction}\n{corrective}"
 
 
 __all__ = ["SYSTEM_PROMPTS", "node_of", "system_for"]
