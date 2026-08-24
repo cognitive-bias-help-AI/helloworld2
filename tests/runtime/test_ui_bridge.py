@@ -526,6 +526,32 @@ async def test_worker_emits_safe_terminal_reason_without_internal_details():
 
 
 @pytest.mark.asyncio
+async def test_debug_diagnostics_are_safe_while_public_error_stays_sanitized(monkeypatch, capsys):
+    monkeypatch.setenv("REVIEW_DEBUG_LOGS", "1")
+
+    class Graph:
+        async def ainvoke(self, _payload, _config, context=None):
+            raise RuntimeError("MLAPI_API_KEY=super-secret-test-value")
+
+    async def read_message():
+        return _structured_start()
+
+    emitted = []
+
+    async def emit(message):
+        emitted.append(message)
+
+    await serve(read_message, emit, runtime=SimpleNamespace(graph=Graph()))
+
+    assert emitted == [{
+        "kind": "error",
+        "code": "REVIEW_FAILED",
+        "message": "검토를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+    }]
+    assert "super-secret-test-value" not in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
 async def test_worker_emits_existing_hitl_payload_then_terminal_result(monkeypatch):
     messages = iter(
         [

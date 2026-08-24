@@ -4,7 +4,9 @@ import pytest
 
 from app.domain.stock_scope import AssetType, InstrumentCandidate
 from app.orchestration.nodes.s0 import make_nodes
+from app.orchestration.runtime import ReviewRequestContext
 from app.schemas.frozen import SourceTrace, StockCandidate
+from app.ui_bridge import _project_structured_intake
 from tests.s0.fakes import FixtureStockResolver
 from tests.s0.runtime_fixtures import deps, initial_state
 
@@ -65,6 +67,10 @@ async def run_n2(body, resolver):
             instrument(code="03473K", name="SK우", asset_type=AssetType.PREFERRED_STOCK),
             "03473K",
         ),
+        (
+            instrument(code="0126Z0", name="삼성에피스홀딩스"),
+            "0126Z0",
+        ),
         (instrument(is_managed=True), "005930"),
     ],
 )
@@ -120,7 +126,7 @@ async def test_explicit_unsupported_target_is_rejected_without_fallback(candidat
     ("body", "exact_rows", "expected_exact_calls"),
     [
         (target_body(selected_code="123"), {}, []),
-        (target_body(selected_code=None), {}, []),
+        ((lambda body: body | {"masked_intake": body["masked_intake"] | {"target": None}})(target_body(selected_code="005930")), {}, []),
         (target_body(selected_code="005930"), {}, ["005930"]),
     ],
 )
@@ -133,7 +139,63 @@ async def test_explicit_invalid_or_nonexistent_target_never_falls_back(
 
     assert patch == {"node_results": ["n2:block:stock_unresolved"]}
     assert resolver.resolve_exact_calls == expected_exact_calls
-    assert resolver.resolve_calls == []
+    expected_resolve_calls = [("", 5)] if body["masked_intake"]["target"] is None else []
+    assert resolver.resolve_calls == expected_resolve_calls
+
+
+@pytest.mark.asyncio
+async def test_name_only_target_resolves_one_candidate_without_exact_lookup():
+    candidate = StockCandidate(
+        code="005930", name="삼성전자", market="KOSPI", match_kind="exact_name", score=1.0,
+        is_delisted=False, is_managed=False,
+    )
+    resolver = FixtureStockResolver({"삼성전자": [candidate]}, {})
+
+    patch, _, _, _ = await run_n2(target_body(selected_code=None), resolver)
+
+    assert patch["node_results"] == ["n2:ok"]
+    assert patch["stock"] == candidate.model_dump()
+    assert resolver.resolve_calls == [("삼성전자", 5)]
+    assert resolver.resolve_exact_calls == []
+
+
+@pytest.mark.asyncio
+async def test_name_only_target_uses_stock_choice_hitl_for_multiple_candidates(monkeypatch):
+    candidates = [
+        StockCandidate(code="005930", name="삼성전자", market="KOSPI", match_kind="exact_name", score=1.0),
+        StockCandidate(code="005935", name="삼성전자우", market="KOSPI", match_kind="prefix", score=0.8),
+    ]
+    resolver = FixtureStockResolver({"삼성전자": candidates}, {})
+    runtime_deps = deps(resolver=resolver)
+    input_id = await runtime_deps.review_store.put_input("run-s0", target_body(selected_code=None))
+
+    import app.orchestration.nodes.s0 as s0_module
+
+    monkeypatch.setattr(s0_module, "interrupt", lambda payload: {"selected_code": "005935"})
+    patch = await make_nodes(runtime_deps)["n2"](initial_state() | {"input_id": input_id})
+
+    assert patch["node_results"] == ["n2:ok"]
+    assert patch["stock"]["code"] == "005935"
+    assert resolver.resolve_calls == [("삼성전자", 5)]
+
+
+@pytest.mark.asyncio
+async def test_frontend_name_intake_projects_through_n0_and_resolves_at_n2():
+    candidate = StockCandidate(
+        code="005930", name="삼성전자", market="KOSPI", match_kind="exact_name", score=1.0,
+    )
+    resolver = FixtureStockResolver({"삼성전자": [candidate]}, {})
+    runtime_deps = deps(resolver=resolver)
+    nodes = make_nodes(runtime_deps)
+    intake = _project_structured_intake({"mode": "SURVEY_FIRST", "target": {"name": "삼성전자"}})
+    runtime = type("Runtime", (), {"context": ReviewRequestContext(intake=intake)})()
+
+    n0_patch = await nodes["n0"](initial_state(), runtime)
+    n2_patch = await nodes["n2"](initial_state() | n0_patch)
+
+    assert n2_patch["node_results"] == ["n2:ok"]
+    assert n2_patch["stock"]["code"] == "005930"
+    assert resolver.resolve_calls == [("삼성전자", 5)]
 
 
 @pytest.mark.asyncio

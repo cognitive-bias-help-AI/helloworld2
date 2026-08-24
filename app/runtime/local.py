@@ -86,6 +86,13 @@ class LocalRuntime:
     notes: tuple[str, ...] = field(default=())
 
 
+@dataclass(frozen=True)
+class LocalModelRuntime:
+    gateway: Any
+    model_registry: Mapping[str, ModelSpec]
+    http_client: httpx.AsyncClient
+
+
 def _env(name: str) -> str | None:
     value = os.environ.get(name)
     return value.strip() if isinstance(value, str) and value.strip() else None
@@ -210,20 +217,12 @@ def _mlapi_endpoints() -> dict[str, MlApiEndpoint]:
 
 
 @asynccontextmanager
-async def compose_local_runtime(
+async def compose_local_model_runtime(
     *,
-    directory_path: str | Path | None = None,
-    stock_master_path: str | Path = DEFAULT_STOCK_MASTER,
-    alias_overlay_path: str | Path = DEFAULT_DIRECTORY,
-    corp_cache: str | Path = DEFAULT_CORP_CACHE,
     anthropic_client: anthropic.AsyncAnthropic | None = None,
     http_client: httpx.AsyncClient | None = None,
-) -> AsyncIterator[LocalRuntime]:
-    """실 provider + 실 LLM + 메모리 저장소로 그래프를 조립한다.
-
-    HTTP client 와 Anthropic client 는 **만든 쪽이 닫는다.** 주입받은 경우
-    닫지 않는다 — production.py 가 shared client 를 다루는 규칙과 같다.
-    """
+) -> AsyncIterator[LocalModelRuntime]:
+    """조달·저장소와 무관하게 실제 선택된 모델 backend만 조립한다."""
     backend = _model_backend()
     mlapi_endpoints = _mlapi_endpoints() if backend == "mlapi" else None
     if backend == "anthropic" and anthropic_client is None and not _env("ANTHROPIC_API_KEY"):
@@ -249,6 +248,36 @@ async def compose_local_runtime(
     )
 
     try:
+        yield LocalModelRuntime(
+            gateway=model_gateway, model_registry=model_registry, http_client=client
+        )
+    finally:
+        if owns_http:
+            await client.aclose()
+        if owns_model and model_client is not None:
+            await model_client.close()
+
+
+@asynccontextmanager
+async def compose_local_runtime(
+    *,
+    directory_path: str | Path | None = None,
+    stock_master_path: str | Path = DEFAULT_STOCK_MASTER,
+    alias_overlay_path: str | Path = DEFAULT_DIRECTORY,
+    corp_cache: str | Path = DEFAULT_CORP_CACHE,
+    anthropic_client: anthropic.AsyncAnthropic | None = None,
+    http_client: httpx.AsyncClient | None = None,
+) -> AsyncIterator[LocalRuntime]:
+    """실 provider + 실 LLM + 메모리 저장소로 그래프를 조립한다.
+
+    HTTP client 와 Anthropic client 는 **만든 쪽이 닫는다.** 주입받은 경우
+    닫지 않는다 — production.py 가 shared client 를 다루는 규칙과 같다.
+    """
+    async with compose_local_model_runtime(
+        anthropic_client=anthropic_client,
+        http_client=http_client,
+    ) as model_runtime:
+        client = model_runtime.http_client
         adapters, missing, notes = _adapters(client, corp_cache=Path(corp_cache))
         checkpointer = MeasuringInMemorySaver()
         if directory_path is not None:
@@ -261,7 +290,7 @@ async def compose_local_runtime(
             review_store=MemoryReviewStore(),
             evidence_store=MemoryEvidenceStore(),
             provider_admission=ProviderAdmissionController(_capacities(adapters)),
-            model_gateway=model_gateway,
+            model_gateway=model_runtime.gateway,
             stock_resolver=stock_resolver,
             adapters=adapters,
             clock=lambda: datetime.now(UTC),
@@ -272,15 +301,10 @@ async def compose_local_runtime(
             deps=deps,
             graph=build_graph(deps, checkpointer=checkpointer),
             checkpointer=checkpointer,
-            model_registry=model_registry,
+            model_registry=model_runtime.model_registry,
             missing=tuple(missing),
             notes=tuple(notes),
         )
-    finally:
-        if owns_http:
-            await client.aclose()
-        if owns_model and model_client is not None:
-            await model_client.close()
 
 
 def initial_state(run_id: str, thread_id: str, *, now: datetime | None = None) -> dict:
@@ -314,6 +338,8 @@ __all__ = [
     "DEFAULT_DIRECTORY",
     "DEFAULT_STOCK_MASTER",
     "LocalRuntime",
+    "LocalModelRuntime",
+    "compose_local_model_runtime",
     "compose_local_runtime",
     "initial_state",
     "load_dotenv",

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { DECISION_ACTIONS, HOLDING_STATES, TIME_HORIZONS } from "./intake.ts";
@@ -15,7 +16,26 @@ type ChildLike = {
 
 const sessions = new Map<string, ReviewWorkerSession>();
 const REQUEST_TIMEOUT_MS = 120_000;
-const DEBUG_LOGS = ["1", "true", "yes", "on"].includes((process.env.REVIEW_DEBUG_LOGS ?? "").toLowerCase());
+let DEBUG_LOGS = ["1", "true", "yes", "on"].includes((process.env.REVIEW_DEBUG_LOGS ?? "").toLowerCase());
+
+function debugValueEnabled(value: string | undefined): boolean {
+  return ["1", "true", "yes", "on"].includes((value ?? "").trim().toLowerCase());
+}
+
+export function debugLogsEnabled(
+  repositoryRoot: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  if (env.REVIEW_DEBUG_LOGS !== undefined) return debugValueEnabled(env.REVIEW_DEBUG_LOGS);
+  try {
+    const line = readFileSync(path.join(repositoryRoot, ".env"), "utf8")
+      .split(/\r?\n/)
+      .find((item) => /^\s*REVIEW_DEBUG_LOGS\s*=/.test(item));
+    return debugValueEnabled(line?.split("=", 2)[1]?.replace(/^['"]|['"]$/g, ""));
+  } catch {
+    return false;
+  }
+}
 
 function workerLog(event: string, session: string, detail?: string) {
   if (DEBUG_LOGS) console.error(`[worker] ${event} session=${session}${detail ? ` ${detail}` : ""}`);
@@ -177,6 +197,7 @@ export class ReviewWorkerSession {
   private readonly child: ChildLike;
   private readonly remove: () => void;
   private readonly timeoutMs: number;
+  private readonly debugLogs: boolean;
   private buffer = "";
   private inFlight?: {
     resolve: (value: ReviewResponse) => void;
@@ -190,16 +211,18 @@ export class ReviewWorkerSession {
     child: ChildLike,
     remove: () => void,
     timeoutMs = REQUEST_TIMEOUT_MS,
+    debugLogs = DEBUG_LOGS,
   ) {
     this.id = id;
     this.child = child;
     this.remove = remove;
     this.timeoutMs = timeoutMs;
+    this.debugLogs = debugLogs;
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => this.onData(chunk));
     child.on("exit", () => { workerLog("EXIT", this.id); this.finish(new Error("worker exited")); });
     child.on("error", () => { workerLog("PROCESS_ERROR", this.id); this.finish(new Error("worker failed")); });
-    if (DEBUG_LOGS) {
+    if (this.debugLogs) {
       child.stderr.setEncoding("utf8");
       child.stderr.on("data", (chunk: string) => process.stderr.write(chunk));
     } else child.stderr.resume();
@@ -271,14 +294,19 @@ export class ReviewWorkerSession {
 function spawnSession(): ReviewWorkerSession {
   const id = randomUUID();
   const repositoryRoot = path.resolve(process.cwd(), "..");
+  DEBUG_LOGS = debugLogsEnabled(repositoryRoot);
   const child = spawn("uv", ["run", "python", "-m", "app.ui_bridge"], {
     cwd: repositoryRoot,
     stdio: "pipe",
     windowsHide: true,
-    env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+    env: {
+      ...process.env,
+      ...(DEBUG_LOGS ? { REVIEW_DEBUG_LOGS: "1" } : {}),
+      PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1",
+    },
   });
   workerLog("SPAWN", id);
-  const session = new ReviewWorkerSession(id, child, () => sessions.delete(id));
+  const session = new ReviewWorkerSession(id, child, () => sessions.delete(id), REQUEST_TIMEOUT_MS, DEBUG_LOGS);
   sessions.set(id, session);
   return session;
 }

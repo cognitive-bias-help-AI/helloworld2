@@ -218,11 +218,27 @@ def make_nodes(deps: RuntimeDeps):
                     ]
                 }
             if target.selected_code is None:
-                return {
-                    "node_results": [
-                        f"n2:block:{ReasonCode.STOCK_UNRESOLVED.value}"
-                    ]
-                }
+                candidates = deps.stock_resolver.resolve(target.name or "", limit=5)
+                if not candidates:
+                    return {
+                        "node_results": [
+                            f"n2:block:{ReasonCode.STOCK_UNRESOLVED.value}"
+                        ]
+                    }
+                resume = None
+                if len(candidates) > 1:
+                    payload = interrupt(
+                        StockChoiceRequest.from_candidates(target.name or "", candidates).model_dump()
+                    )
+                    resume = StockChoiceResume.model_validate(payload)
+                selected = select_stock(candidates, resume)
+                if selected is None:
+                    return {
+                        "node_results": [
+                            f"n2:block:{ReasonCode.STOCK_UNRESOLVED.value}"
+                        ]
+                    }
+                return {"stock": selected.model_dump(), "node_results": ["n2:ok"]}
             exact = deps.stock_resolver.resolve_exact(target.selected_code)
             if len(exact) > 1 or (
                 len(exact) == 1 and exact[0].code != target.selected_code

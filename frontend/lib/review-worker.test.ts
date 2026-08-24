@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 
-import { ReviewWorkerSession } from "./review-worker.ts";
+import { debugLogsEnabled, ReviewWorkerSession } from "./review-worker.ts";
 
 const start = {
   kind: "start" as const,
@@ -13,6 +16,14 @@ const start = {
     structured: [{ slotId: 4, responseState: "answered" as const, value: "검토" }],
   },
 };
+
+test("root .env enables safe worker diagnostics without exposing its value", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "review-worker-"));
+  writeFileSync(path.join(root, ".env"), "REVIEW_DEBUG_LOGS=1\nMLAPI_API_KEY=super-secret-test-value\n");
+
+  assert.equal(debugLogsEnabled(root, {}), true);
+  assert.equal(debugLogsEnabled(root, { REVIEW_DEBUG_LOGS: "0" }), false);
+});
 
 function fakeChild() {
   const child = new EventEmitter() as EventEmitter & {

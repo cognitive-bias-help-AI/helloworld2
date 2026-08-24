@@ -24,11 +24,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from langgraph.types import Command
+from pydantic import BaseModel
 
 from app.runtime.local import (
     DEFAULT_CORP_CACHE,
     DEFAULT_DIRECTORY,
     DEFAULT_STOCK_MASTER,
+    compose_local_model_runtime,
     compose_local_runtime,
     initial_state,
     load_dotenv,
@@ -96,33 +98,27 @@ async def _preflight() -> int:
     을 구조화 출력이 받아주는지는 문서만으로 확정할 수 없다. 데모 당일에
     n3·n10 만 400 으로 죽는 것을 미리 잡기 위한 명령이다.
     """
-    import anthropic
-
-    from app.models.registry import MODEL_BY_SLOT
-
-    client = anthropic.AsyncAnthropic()
     failures = 0
-    try:
+    slot_by_node = {
+        "n1": "SMALL", "n3": "SMALL", "n7": "SMALL",
+        "n8": "LARGE", "n9": "LARGE", "n10": "LARGE", "n11": "MID",
+    }
+
+    class _PreflightInput(BaseModel):
+        pass
+
+    async with compose_local_model_runtime() as model_runtime:
         for node, schema in _draft_schemas():
-            slot = {"n1": "SMALL", "n3": "SMALL", "n7": "SMALL", "n11": "MID"}.get(
-                node, "LARGE"
-            )
+            slot = slot_by_node[node]
             try:
-                await client.messages.parse(
-                    model=MODEL_BY_SLOT[slot],
-                    max_tokens=1024,
-                    system="스키마 수용 여부만 확인한다. 빈 값으로 채워라.",
-                    messages=[{"role": "user", "content": "{}"}],
-                    output_format=schema,
+                await model_runtime.gateway.invoke(
+                    slot, f"{node}/v1", _PreflightInput(), schema
                 )
             except Exception as exc:  # noqa: BLE001 - 어떤 실패든 그대로 보고한다
                 failures += 1
-                _out(f"  [FAIL] {node:4} {schema.__name__:24} {type(exc).__name__}: {exc}")
+                _out(f"  [FAIL] {node:4} {schema.__name__:24} {type(exc).__name__}")
             else:
                 _out(f"  [ok]   {node:4} {schema.__name__:24} 수용")
-    finally:
-        await client.close()
-
     _out()
     if failures:
         _out(f"{failures}건 거부됨. 해당 스키마는 구조화 출력으로 못 받는다.")

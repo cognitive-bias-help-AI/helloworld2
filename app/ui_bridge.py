@@ -6,7 +6,6 @@ import asyncio
 import json
 import os
 import sys
-import traceback
 from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import uuid4
@@ -250,17 +249,10 @@ async def serve(read_message: Any, emit: Any, *, runtime: Any) -> None:
             debug_log("review", "graph invocation returned", run_id=run_id, command="resume")
         raise RuntimeError("HITL turn limit exceeded")
     except BaseException as error:
-        if debug_enabled():
-            print("=" * 40, file=sys.stderr, flush=True)
-            print("REVIEW WORKER FAILURE", file=sys.stderr, flush=True)
-            print("=" * 40, file=sys.stderr, flush=True)
-            debug_log(
-                "review", "failure", run_id=run_id, thread_id=run_id, phase=phase,
-                command=command, exception_type=type(error).__name__,
-                exception_message=str(error),
-            )
-            traceback.print_exc(file=sys.stderr)
-            print("=" * 40, file=sys.stderr, flush=True)
+        debug_log(
+            "review", "failure", run_id=run_id, thread_id=run_id, phase=phase,
+            command=command, exception_type=type(error).__name__,
+        )
         await emit({"kind": "error", **public_error(error)})
 
 
@@ -296,8 +288,7 @@ async def _stdio_main() -> None:
             debug_log("review", "runtime composition completed")
             await serve(read_message, emit, runtime=runtime)
     except BaseException as error:
-        if debug_enabled():
-            traceback.print_exc(file=sys.stderr)
+        debug_log("review", "composition failure", exception_type=type(error).__name__)
         await emit({"kind": "error", **public_error(error)})
     finally:
         debug_log("review", "worker terminating")
