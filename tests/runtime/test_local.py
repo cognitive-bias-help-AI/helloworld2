@@ -2,10 +2,11 @@
 
 import os
 
+import httpx
 import pytest
 
 from app.orchestration.state import ReviewState
-from app.runtime.local import _capacities, initial_state, load_dotenv
+from app.runtime.local import _capacities, compose_local_runtime, initial_state, load_dotenv
 
 
 def test_initial_state가_ReviewState의_모든_채널을_채운다():
@@ -89,3 +90,29 @@ def test_수용량이_양의_정수가_아니면_거부한다(capacity):
 def test_provider가_하나도_없어도_조립_자체는_가능하다():
     """자격증명이 아직 없는 단계에서도 그래프를 켜볼 수 있어야 한다."""
     assert _capacities({}) == {}
+
+
+@pytest.mark.asyncio
+async def test_injected_Anthropic_client는_environment_API_key를_요구하지_않는다(
+    monkeypatch,
+):
+    class FalseyClient:
+        def __bool__(self):
+            return False
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    injected = FalseyClient()
+    async with httpx.AsyncClient() as http_client, compose_local_runtime(
+        anthropic_client=injected,
+        http_client=http_client,
+    ) as runtime:
+        assert runtime.deps.model_gateway._client is injected
+
+
+@pytest.mark.asyncio
+async def test_Anthropic_client를_생성할때는_environment_API_key가_필수다(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+        async with compose_local_runtime():
+            pass

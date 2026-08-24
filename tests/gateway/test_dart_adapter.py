@@ -513,3 +513,54 @@ async def test_DART_timeout은_typed_execution_error로_normalize된다():
 
     assert caught.value.reason_code is ReasonCode.UPSTREAM_TIMEOUT
     assert caught.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_DART_network_failure는_typed_execution_error로_normalize된다():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("network down", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = DartAdapter(
+            "secret-key",
+            DartCorpCodeResolver({"005930": "00126380"}),
+            client=client,
+        )
+
+        with pytest.raises(ProviderExecutionError) as caught:
+            await adapter.acall(adapter.build_request(query(), NOW))
+
+    assert caught.value.reason_code is ReasonCode.UPSTREAM_TIMEOUT
+    assert caught.value.retryable is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "reason", "retryable"),
+    [
+        (400, ReasonCode.SCHEMA_INVALID, False),
+        (401, ReasonCode.AUTH_FAILED, False),
+        (408, ReasonCode.UPSTREAM_TIMEOUT, True),
+        (429, ReasonCode.RATE_LIMIT, True),
+        (500, ReasonCode.UPSTREAM_5XX, True),
+    ],
+)
+async def test_DART_HTTP_failure는_status별_typed_execution_error로_normalize된다(
+    status, reason, retryable
+):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, request=request, json={"status": "800"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = DartAdapter(
+            "secret-key",
+            DartCorpCodeResolver({"005930": "00126380"}),
+            client=client,
+        )
+
+        with pytest.raises(ProviderExecutionError) as caught:
+            await adapter.acall(adapter.build_request(query(), NOW))
+
+    assert caught.value.reason_code is reason
+    assert caught.value.retryable is retryable
+    assert caught.value.http_status == status

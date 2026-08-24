@@ -327,6 +327,30 @@ class DartAdapter:
                 retryable=True,
                 safe_detail="DART request timed out",
             ) from exc
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status in {401, 403}:
+                reason_code, retryable = ReasonCode.AUTH_FAILED, False
+            elif status == 408:
+                reason_code, retryable = ReasonCode.UPSTREAM_TIMEOUT, True
+            elif status == 429:
+                reason_code, retryable = ReasonCode.RATE_LIMIT, True
+            elif 500 <= status <= 599:
+                reason_code, retryable = ReasonCode.UPSTREAM_5XX, True
+            else:
+                reason_code, retryable = ReasonCode.SCHEMA_INVALID, False
+            raise ProviderExecutionError(
+                reason_code=reason_code,
+                retryable=retryable,
+                http_status=status,
+                safe_detail=f"DART request failed with HTTP {status}",
+            ) from exc
+        except httpx.NetworkError as exc:
+            raise ProviderExecutionError(
+                reason_code=ReasonCode.UPSTREAM_TIMEOUT,
+                retryable=True,
+                safe_detail="DART network failure",
+            ) from exc
 
     async def _acall(self, req: Request) -> dict:
         if req.provider == self.name and req.endpoint == DISCLOSURE_LIST_URL and req.method == "GET":

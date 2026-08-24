@@ -186,7 +186,7 @@ async def compose_local_runtime(
     HTTP client 와 Anthropic client 는 **만든 쪽이 닫는다.** 주입받은 경우
     닫지 않는다 — production.py 가 shared client 를 다루는 규칙과 같다.
     """
-    if not _env("ANTHROPIC_API_KEY"):
+    if anthropic_client is None and not _env("ANTHROPIC_API_KEY"):
         raise RuntimeError(
             "ANTHROPIC_API_KEY 가 없다. .env 에 넣거나 환경변수로 export 하라."
         )
@@ -194,7 +194,11 @@ async def compose_local_runtime(
     owns_http = http_client is None
     owns_model = anthropic_client is None
     client = http_client or httpx.AsyncClient()
-    model_client = anthropic_client or anthropic.AsyncAnthropic()
+    model_client = (
+        anthropic_client
+        if anthropic_client is not None
+        else anthropic.AsyncAnthropic()
+    )
 
     try:
         adapters, missing, notes = _adapters(client, corp_cache=Path(corp_cache))

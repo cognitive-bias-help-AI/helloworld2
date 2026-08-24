@@ -842,7 +842,9 @@ def make_nodes(deps: RuntimeDeps):
                 "node_results": ["n9:partial"],
             }
         drafts = None
+        llm_calls = 0
         for _ in range(2):
+            llm_calls += 1
             candidate, _ = await _invoke(deps, "n9", "LARGE", view, FindingDraft)
             values = [*deterministic_drafts, candidate]
             try:
@@ -873,7 +875,7 @@ def make_nodes(deps: RuntimeDeps):
             "finding_ids": ids,
             "oppose": view.oppose.model_dump(),
             "node_results": ["n9:ok"],
-            "counters": {"llm_calls": 1},
+            "counters": {"llm_calls": llm_calls},
         }
 
     async def n10(state: ReviewState):

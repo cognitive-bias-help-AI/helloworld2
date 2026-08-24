@@ -883,6 +883,52 @@ async def test_n9_mixed_uses_llm_only_for_evidence_backed_and_builds_no_evidence
     assert patch["counters"] == {"llm_calls": 1}
 
 
+class RetryThenValidFindingGateway(FlowGateway):
+    def __init__(self):
+        super().__init__()
+        self.n9_attempts = 0
+
+    async def invoke(self, slot, prompt_version, input_view, output_schema):
+        if output_schema is FindingDraft:
+            self.calls.append(("n9", input_view))
+            self.n9_attempts += 1
+            evaluation = input_view.evaluations[0]
+            if self.n9_attempts == 1:
+                return FindingDraft(
+                    slot_id=1,
+                    kind="mismatch",
+                    citations=[],
+                    claim_evaluation_id=evaluation.claim_evaluation_id,
+                ), Usage(model_slot=slot, prompt_tokens=0, output_tokens=0, ctx_chars=1)
+            return FindingDraft(
+                slot_id=1,
+                kind="unverified",
+                citations=[evaluation.citations[0]],
+                claim_evaluation_id=evaluation.claim_evaluation_id,
+            ), Usage(model_slot=slot, prompt_tokens=0, output_tokens=0, ctx_chars=1)
+        return await super().invoke(slot, prompt_version, input_view, output_schema)
+
+
+@pytest.mark.asyncio
+async def test_n9_counter는_assembly_retry의_실제_LLM_invocation을_센다():
+    gateway = RetryThenValidFindingGateway()
+    runtime_deps = deps(gateway=gateway)
+    item = claim(1, verifiable=True)
+    state = await seed_claims(runtime_deps, [item])
+    planned = query(1, item.claim_id)
+    proof = evidence(1)
+    state["query_ids"] = await seed_queries_and_evidence(
+        runtime_deps, [(item, planned, proof)]
+    )
+    n7_patch = await make_nodes(runtime_deps)["n7"](state)
+    n8_patch = await make_nodes(runtime_deps)["n8"](state | n7_patch)
+
+    patch = await make_nodes(runtime_deps)["n9"](state | n7_patch | n8_patch)
+
+    assert gateway.n9_attempts == 2
+    assert patch["counters"] == {"llm_calls": 2}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", ["non_verifiable_only", "no_evidence_only"])
 async def test_n9_zero_evidence_backed_is_partial_not_blocked(case):

@@ -86,3 +86,53 @@ async def test_degraded_two_failures_then_rule_fallback_and_no_third_call():
     assert links and all(item.stance_source == "rule" for item in links)
     assert "n7:partial" in result["node_results"]
     assert report["banners"] == ["COVERAGE_TRUNCATED"]
+
+
+class ModelGatewayFailure(RuntimeError):
+    pass
+
+
+class FailAtNodeGateway(FlowGateway):
+    def __init__(self, failed_node: str):
+        super().__init__()
+        self.failed_node = failed_node
+        self.failed_calls = 0
+
+    async def invoke(self, slot, prompt_version, input_view, output_schema):
+        node = prompt_version.split("/", 1)[0]
+        if node == self.failed_node:
+            self.calls.append((node, input_view))
+            self.failed_calls += 1
+            raise ModelGatewayFailure(f"{node} gateway failure")
+        return await super().invoke(slot, prompt_version, input_view, output_schema)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failed_node", "expected_calls"),
+    [
+        ("n1", 1),
+        ("n3", 2),
+        ("n7", 1),
+        ("n8", 1),
+        ("n9", 1),
+        ("n10", 1),
+        ("n11", 1),
+    ],
+)
+async def test_LLM_gateway_failure_contract는_retry_owner를_지키고_publish를_막는다(
+    failed_node, expected_calls
+):
+    gateway = FailAtNodeGateway(failed_node)
+    runtime_deps = deps(gateway=gateway)
+    graph = build_graph(runtime_deps, checkpointer=MeasuringInMemorySaver())
+
+    with pytest.raises(ModelGatewayFailure, match=failed_node):
+        await graph.ainvoke(
+            initial_state(),
+            config(f"failure-{failed_node}"),
+            context=ReviewRequestContext(intake=complete_intake()),
+        )
+
+    assert gateway.failed_calls == expected_calls
+    assert runtime_deps.review_store._reports == {}
