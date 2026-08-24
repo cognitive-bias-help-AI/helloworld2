@@ -29,6 +29,98 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
 
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isNumberArray(value: unknown): value is number[] {
+  return Array.isArray(value) && value.every((item) => Number.isInteger(item));
+}
+
+function isCitation(value: unknown): boolean {
+  return isRecord(value) && typeof value.evidenceId === "string" && typeof value.span === "string";
+}
+
+function isNumericCheck(value: unknown): boolean {
+  return isRecord(value) && typeof value.metric === "string" && typeof value.claimed === "string" &&
+    (value.observed === null || typeof value.observed === "number") && isNullableString(value.unit) &&
+    isNullableString(value.period) && ["consistent", "inconsistent", "not_comparable", "no_data"].includes(String(value.result)) &&
+    typeof value.evidenceId === "string" && value.computedBy === "rule";
+}
+
+const VERDICTS = ["support", "partial_support", "unsupported", "contradicted", "unverifiable"];
+const SOURCES = ["survey", "chat_explicit", "user_confirmed", "llm_extraction", "system_inference", "market_data", "unknown"];
+
+function isEvaluation(value: unknown): boolean {
+  return isRecord(value) && typeof value.claimEvaluationId === "string" && typeof value.claimId === "string" &&
+    VERDICTS.includes(String(value.verdict)) && isStringArray(value.supportEvidenceIds) &&
+    isStringArray(value.opposeEvidenceIds) && isStringArray(value.neutralEvidenceIds) &&
+    isStringArray(value.unknownEvidenceIds) && Array.isArray(value.citations) && value.citations.every(isCitation) &&
+    Array.isArray(value.numericChecks) && value.numericChecks.every(isNumericCheck) &&
+    isNumberArray(value.missingDimensions) && isStringArray(value.uncertaintyCodes) && typeof value.createdAt === "string";
+}
+
+function isClaim(value: unknown): boolean {
+  return isRecord(value) && typeof value.claimId === "string" && Number.isInteger(value.slotId) &&
+    typeof value.proposition === "string" && typeof value.verifiable === "boolean" && SOURCES.includes(String(value.origin)) &&
+    isNullableString(value.supersededBy) && (value.evaluation === null || isEvaluation(value.evaluation));
+}
+
+function isJudgmentSlot(value: unknown): boolean {
+  return isRecord(value) && Number.isInteger(value.slotId) && ["RESOLVED", "ABSENT", "CONFLICT", "AMBIGUOUS"].includes(String(value.status)) &&
+    ["answered", "unknown", "undecided", "user_declined"].includes(String(value.responseState)) &&
+    isStringArray(value.observationIds) && isStringArray(value.values) && isStringArray(value.issueIds) &&
+    isStringArray(value.sources) && value.sources.every((item) => SOURCES.includes(item));
+}
+
+function isEvidence(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.evidenceId !== "string" || !["dart", "news", "quote"].includes(String(value.sourceType)) ||
+      typeof value.sourceRef !== "string" || !isNullableString(value.publisher) || !isNullableString(value.publishedAt) ||
+      !isNullableString(value.sourceUrl) || typeof value.rawSpan !== "string" ||
+      !["headline_snippet", "full_text", "structured_field"].includes(String(value.spanScope)) ||
+      !isStringArray(value.relatedQueryIds) || !isStringArray(value.relatedClaimIds) || !isStringArray(value.roles) ||
+      !value.roles.every((item) => ["PRIMARY", "CORROBORATIVE"].includes(item)) || !Array.isArray(value.stances) ||
+      typeof value.source !== "string" || typeof value.excerpt !== "string" || !isNullableString(value.url)) return false;
+  return value.stances.every((item) => isRecord(item) && typeof item.claimId === "string" &&
+    ["support", "oppose", "neutral", "unknown"].includes(String(item.stance)) &&
+    ["llm", "rule"].includes(String(item.stanceSource)) && isNullableString(item.queryId));
+}
+
+function isFinding(value: unknown): boolean {
+  return isRecord(value) && typeof value.findingId === "string" && Number.isInteger(value.slotId) &&
+    ["mismatch", "missing", "unverified", "conflict"].includes(String(value.kind)) &&
+    Array.isArray(value.citations) && value.citations.every(isCitation) && isNullableString(value.claimEvaluationId) &&
+    typeof value.createdAt === "string";
+}
+
+function isOpposingSearch(value: unknown): boolean {
+  return isRecord(value) && ["verified", "unverified"].includes(String(value.status)) &&
+    (value.count === null || Number.isInteger(value.count)) && (value.queries === null || isStringArray(value.queries)) &&
+    isNullableString(value.reason);
+}
+
+function isProviderCollection(value: unknown): boolean {
+  return isRecord(value) && ["dart", "news", "quote"].includes(String(value.source)) &&
+    ["OK", "PARTIAL", "MISSING"].includes(String(value.status)) && isNullableString(value.reasonCode) &&
+    [value.itemsFetched, value.itemsAdopted, value.itemsDeduped, value.queriesRun].every((item) => Number.isInteger(item));
+}
+
+function isReport(value: unknown): boolean {
+  if (!isRecord(value) || value.schemaVersion !== "s0.v1" || !Array.isArray(value.renderedSlots) ||
+      !isStringArray(value.banners) || !Array.isArray(value.theoryNotes) || !Array.isArray(value.citations) ||
+      typeof value.createdAt !== "string") return false;
+  const slots = value.renderedSlots.every((item) => isRecord(item) && Number.isInteger(item.slotNo) &&
+    typeof item.text === "string" && Array.isArray(item.citations) && item.citations.every(isCitation));
+  const citations = value.citations.every((item) => isCitation(item) && isRecord(item) &&
+    isNullableString(item.sourceUrl) && isNullableString(item.publisher));
+  const notes = value.theoryNotes.every((item) => isRecord(item) && typeof item.theory_id === "string" &&
+    Array.isArray(item.trigger) && item.trigger.length === 2 && Number.isInteger(item.trigger[0]) &&
+    ["absent", "partial"].includes(String(item.trigger[1])) && typeof item.name === "string" &&
+    typeof item.definition === "string" && typeof item.observable_pattern === "string" &&
+    typeof item.non_diagnostic_warning === "string" && isStringArray(item.source_refs));
+  return slots && citations && notes;
+}
+
 function isJudgmentContext(value: unknown): boolean {
   if (!isRecord(value)) return false;
   const allowed = new Set(["decisionAction", "holdingState", "timeHorizon", "primaryReasons", "expectedOutcome"]);
@@ -47,6 +139,9 @@ function isWorkerResponse(value: unknown): value is ReviewResponse {
   if (value.kind === "error") {
     return typeof value.code === "string" && typeof value.message === "string";
   }
+  if (value.kind === "terminal") {
+    return typeof value.reasonCode === "string" && typeof value.message === "string";
+  }
   if (value.kind === "hitl") {
     if (!isRecord(value.payload)) return false;
     const { candidates, questions } = value.payload;
@@ -56,18 +151,20 @@ function isWorkerResponse(value: unknown): value is ReviewResponse {
       typeof item.display_name === "string" &&
       (item.market === undefined || typeof item.market === "string"));
     return Array.isArray(questions) && questions.every((item) =>
-      isRecord(item) && typeof item.ask_id === "string" && typeof item.question === "string");
+      isRecord(item) && typeof item.ask_id === "string" && typeof item.question === "string" &&
+      (item.slot_id === undefined || Number.isInteger(item.slot_id)));
   }
   if (value.kind !== "result" || !isRecord(value.result)) return false;
   const result = value.result;
   return (
-    isRecord(result.stock) && isNullableString(result.stock.code) && isNullableString(result.stock.name) &&
-    Array.isArray(result.claims) && result.claims.every((item) =>
-      isRecord(item) && typeof item.text === "string" && typeof item.summary === "string" &&
-      ["verified", "partial", "unverified"].includes(String(item.status))) &&
-    Array.isArray(result.evidence) && result.evidence.every((item) =>
-      isRecord(item) && typeof item.source === "string" && typeof item.excerpt === "string" &&
-      isNullableString(item.url) && isNullableString(item.publishedAt)) &&
+    isRecord(result.stock) && isNullableString(result.stock.code) && isNullableString(result.stock.name) && isNullableString(result.stock.market) &&
+    Array.isArray(result.judgmentSlots) && result.judgmentSlots.length === 8 && result.judgmentSlots.every(isJudgmentSlot) &&
+    Array.isArray(result.claims) && result.claims.every(isClaim) &&
+    Array.isArray(result.evidence) && result.evidence.every(isEvidence) &&
+    Array.isArray(result.findings) && result.findings.every(isFinding) &&
+    (result.opposingSearch === null || isOpposingSearch(result.opposingSearch)) &&
+    isRecord(result.providerCollections) && Object.values(result.providerCollections).every(isProviderCollection) &&
+    isReport(result.report) &&
     typeof result.finalSummary === "string" &&
     Array.isArray(result.banners) && result.banners.every((item) => typeof item === "string") &&
     typeof result.degraded === "boolean" &&
@@ -154,7 +251,7 @@ export class ReviewWorkerSession {
       this.inFlight = undefined;
       workerLog("RECV", this.id, `kind=${response.kind}`);
       pending.resolve(response);
-      if (response.kind === "result" || response.kind === "error") this.finish();
+      if (response.kind === "result" || response.kind === "terminal" || response.kind === "error") this.finish();
     }
   }
 

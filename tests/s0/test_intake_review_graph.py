@@ -103,6 +103,39 @@ def answer_interrupt(paused):
 
 
 @pytest.mark.asyncio
+async def test_graph_accepts_canonical_unknown_hitl_without_answer_text():
+    resolver = FixtureStockResolver({}, exact_rows={"005930": [InstrumentCandidate(
+        code="005930", name="삼성전자", market="KOSPI", asset_type="COMMON_STOCK"
+    )]})
+    runtime_deps = deps(gateway=AdaptiveGateway(), resolver=resolver)
+    graph = build_graph(runtime_deps, checkpointer=MeasuringInMemorySaver())
+    cfg = config("unknown-without-answer")
+    intake = HybridIntake(
+        schema_version="hybrid_intake/v1",
+        mode=IntakeMode.HYBRID,
+        target=TargetSecurityInput(selected_code="005930", source=SourceTrace.SURVEY),
+        structured=(StructuredAnswer(
+            slot_id=8, value="전제가 바뀌면 재검토", source=SourceTrace.SURVEY,
+            response_state=ResponseState.ANSWERED,
+        ),),
+        free_text=(FreeTextInput(text=RAW, source=SourceTrace.CHAT_EXPLICIT),),
+    )
+    paused = await graph.ainvoke(
+        initial_state(), cfg, context=ReviewRequestContext(intake=intake)
+    )
+    questions = paused["__interrupt__"][0].value["questions"]
+
+    resumed = await graph.ainvoke(Command(resume={"answers": [
+        {"ask_id": item["ask_id"], "response_state": "unknown"}
+        for item in questions
+    ]}), cfg)
+
+    observations = await runtime_deps.review_store.get_slot_observations("run-s0")
+    assert resumed.get("__interrupt__") or resumed.get("report_id")
+    assert {item.slot_id for item in observations if item.response_state is ResponseState.UNKNOWN} == {
+        item["slot_id"] for item in questions
+    }
+@pytest.mark.asyncio
 async def test_production_topology는_legacy_n3_n4_n3b를_intake_review로_교체한다():
     assert "intake_review" in VERTICES
     assert {"n3", "n4", "n3b"}.isdisjoint(VERTICES)

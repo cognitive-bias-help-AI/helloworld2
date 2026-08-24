@@ -4,11 +4,14 @@ import test from "node:test";
 import { createReviewPostHandler } from "../app/api/reviews/route.ts";
 
 const intake = {
-  stockInput: "삼성전자",
-  decisionAction: "CONSIDER_ENTRY",
-  holdingState: "NOT_HOLDING",
-  timeHorizon: "LONG",
-  primaryReasons: "AI 수요와 실적 개선을 기대합니다.",
+  mode: "SURVEY_FIRST" as const,
+  target: { name: "삼성전자" },
+  structured: [
+    { slotId: 1, responseState: "answered" as const, value: "CONSIDER_ENTRY" },
+    { slotId: 2, responseState: "answered" as const, value: "NOT_HOLDING" },
+    { slotId: 3, responseState: "answered" as const, value: "LONG" },
+    { slotId: 4, responseState: "answered" as const, value: "AI 수요와 실적 개선을 기대합니다." },
+  ],
 };
 
 function request(body: unknown) {
@@ -35,7 +38,7 @@ test("review route accepts exactly the structured intake body", async () => {
 
 test("review route rejects invalid structured intake with 400", async () => {
   const post = createReviewPostHandler(async () => { throw new Error("must not start"); });
-  const response = await post(request({ intake: { ...intake, unexpected: true } }));
+  const response = await post(request({ intake: { ...intake, mode: "INVALID" } }));
 
   assert.equal(response.status, 400);
   assert.deepEqual(await response.json(), { message: "입력 내용을 다시 확인해주세요." });

@@ -325,18 +325,19 @@ def make_nodes(deps: RuntimeDeps):
                 raise ValueError("HITL answers must match emitted AskRecords in order")
             for answer in answers:
                 resume_key = f"resume:{answer['ask_id']}"
-                raw_answer = str(answer.get("answer", "")).strip()
-                if not raw_answer:
-                    raise ValueError("HITL answer must be non-blank")
+                response_state = ResponseState(answer.get("response_state", "answered"))
+                raw_answer = str(answer.get("answer", "")).strip() or None
+                if response_state is ResponseState.ANSWERED and raw_answer is None:
+                    raise ValueError("ANSWERED HITL response must be non-blank")
+                if response_state is not ResponseState.ANSWERED and raw_answer is not None:
+                    raise ValueError("non-answer HITL response must not carry answer text")
                 event = HitlResumeEvent(
                     run_id=state["run_id"],
                     event_key=resume_key,
                     input_id=state["input_id"],
                     ask_id=answer["ask_id"],
                     raw_answer=raw_answer,
-                    response_state=ResponseState(
-                        answer.get("response_state", "answered")
-                    ),
+                    response_state=response_state,
                     run_started_at=datetime.fromisoformat(state["started_at"]),
                     existing_claim_ids=tuple(claim_ids),
                 )
@@ -439,16 +440,19 @@ def make_nodes(deps: RuntimeDeps):
                 raise ValueError("HITL answers must match emitted AskRecords in order")
 
             for index, answer in enumerate(answers):
-                raw_answer = str(answer.get("answer", "")).strip()
-                if not raw_answer:
-                    raise ValueError("HITL answer must be non-blank")
+                response_state = ResponseState(answer.get("response_state", "answered"))
+                raw_answer = str(answer.get("answer", "")).strip() or None
+                if response_state is ResponseState.ANSWERED and raw_answer is None:
+                    raise ValueError("ANSWERED HITL response must be non-blank")
+                if response_state is not ResponseState.ANSWERED and raw_answer is not None:
+                    raise ValueError("non-answer HITL response must not carry answer text")
                 event = HitlResumeEvent(
                     run_id=state["run_id"],
                     event_key=f"resume:{answer['ask_id']}",
                     input_id=state["input_id"],
                     ask_id=answer["ask_id"],
                     raw_answer=raw_answer,
-                    response_state=ResponseState(answer.get("response_state", "answered")),
+                    response_state=response_state,
                     run_started_at=datetime.fromisoformat(state["started_at"]),
                     existing_claim_ids=tuple(claim_ids),
                 )

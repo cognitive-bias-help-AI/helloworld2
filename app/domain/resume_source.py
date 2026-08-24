@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from app.domain.intake import ResponseState
 from app.domain.semantic_source import (
     SEMANTIC_PROJECTION_VERSION,
     SemanticProjectionVersion,
@@ -32,7 +33,8 @@ class ResumeSemanticSource(_ResumeSourceModel):
     slot_id: SlotId
     issue_id: NonBlankStr | None = None
     origin: Literal[SourceTrace.USER_CONFIRMED] = SourceTrace.USER_CONFIRMED
-    sanitized_text: NonBlankStr
+    response_state: ResponseState = ResponseState.ANSWERED
+    sanitized_text: NonBlankStr | None = None
     segment_id: NonBlankStr
     semantic_projection_version: SemanticProjectionVersion = SEMANTIC_PROJECTION_VERSION
 
@@ -40,7 +42,11 @@ class ResumeSemanticSource(_ResumeSourceModel):
     def enforce_canonical_body(self):
         if self.segment_id != f"resume:{self.source_id}":
             raise ValueError("resume segment_id must derive from source_id")
-        if sanitize_user_text(self.sanitized_text) != self.sanitized_text:
+        if self.response_state is ResponseState.ANSWERED and self.sanitized_text is None:
+            raise ValueError("answered resume source requires text")
+        if self.response_state is not ResponseState.ANSWERED and self.sanitized_text is not None:
+            raise ValueError("non-answer resume source must not carry text")
+        if self.sanitized_text is not None and sanitize_user_text(self.sanitized_text) != self.sanitized_text:
             raise ValueError("resume source text must already be sanitized")
         return self
 
@@ -61,7 +67,8 @@ def build_resume_semantic_source(
     *,
     resume_key: str,
     slot_id: int,
-    raw_text: str,
+    raw_text: str | None,
+    response_state: ResponseState = ResponseState.ANSWERED,
     issue_id: str | None = None,
 ) -> ResumeSemanticSource:
     """Sanitize one transport answer and mint its deterministic source identity."""
@@ -72,7 +79,8 @@ def build_resume_semantic_source(
         resume_key=resume_key,
         slot_id=slot_id,
         issue_id=issue_id,
-        sanitized_text=sanitize_user_text(raw_text),
+        response_state=response_state,
+        sanitized_text=sanitize_user_text(raw_text) if raw_text is not None else None,
         segment_id=f"resume:{source_id}",
     )
 
@@ -82,6 +90,8 @@ def build_resume_segment(
 ) -> SemanticTextSegment:
     """Hydrate a resume source for composition after initial semantic segments."""
 
+    if source.response_state is not ResponseState.ANSWERED or source.sanitized_text is None:
+        raise ValueError("only answered resume sources have semantic segments")
     return SemanticTextSegment(
         segment_id=source.segment_id,
         origin=SourceTrace.USER_CONFIRMED,
@@ -94,6 +104,9 @@ def build_resume_segment(
 
 def build_resume_text_ref(source: ResumeSemanticSource) -> SemanticTextRef:
     """Reference the complete sanitized resume segment without copying its text."""
+
+    if source.response_state is not ResponseState.ANSWERED or source.sanitized_text is None:
+        raise ValueError("only answered resume sources have text references")
 
     return SemanticTextRef(
         segment_id=source.segment_id,

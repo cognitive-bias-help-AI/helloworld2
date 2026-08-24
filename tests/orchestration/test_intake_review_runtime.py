@@ -609,7 +609,6 @@ async def test_USER_DECLINED_resume는_재질문하거나_단순_missing으로_B
             event_key="resume-1",
             input_id=input_id,
             ask_id=ask.ask_id,
-            raw_answer="답변하지 않겠습니다",
             response_state=ResponseState.USER_DECLINED,
             run_started_at=NOW,
         ),

@@ -1,5 +1,6 @@
 import type { HitlPayload, ReviewResponse, ReviewResult } from "./types.ts";
 import type { DecisionAction, HoldingState, TimeHorizon } from "./intake.ts";
+import type { ResponseState } from "./intake.ts";
 
 export const reviewPageText = {
   title: "투자 판단 점검",
@@ -33,6 +34,7 @@ export type ReviewPageState = {
   hitl: HitlPayload | null;
   result: ReviewResult | null;
   error: string;
+  terminalReasonCode: string;
 };
 
 export const initialReviewPageState: ReviewPageState = {
@@ -41,10 +43,11 @@ export const initialReviewPageState: ReviewPageState = {
   hitl: null,
   result: null,
   error: "",
+  terminalReasonCode: "",
 };
 
 export function beginReview(state: ReviewPageState): ReviewPageState {
-  return state.view === "loading" ? state : { ...state, view: "loading", error: "" };
+  return state.view === "loading" ? state : { ...state, view: "loading", error: "", terminalReasonCode: "" };
 }
 
 export function applyReviewResponse(
@@ -54,6 +57,9 @@ export function applyReviewResponse(
   const sessionId = response.sessionId || state.sessionId;
   if (response.kind === "hitl") return { ...state, sessionId, hitl: response.payload, view: "hitl" };
   if (response.kind === "result") return { ...state, sessionId, result: response.result, view: "success" };
+  if (response.kind === "terminal") {
+    return { ...state, sessionId, terminalReasonCode: response.reasonCode, error: response.message, view: "error" };
+  }
   return { ...state, sessionId, error: response.message, view: "error" };
 }
 
@@ -62,13 +68,19 @@ export function selectedCodeResumeValue(selectedCode: string) {
 }
 
 export function questionResumeValue(
-  questions: Array<{ ask_id: string; question?: string }>,
-  answers: Record<string, string>,
+  questions: Array<{ ask_id: string; slot_id?: number; question?: string }>,
+  answers: Record<string, { responseState: ResponseState; answer?: string }>,
 ) {
   return {
-    answers: questions.map((question) => ({
-      ask_id: question.ask_id,
-      answer: answers[question.ask_id].trim(),
-    })),
+    answers: questions.map((question) => {
+      const response = answers[question.ask_id];
+      if (!response) throw new Error("every question requires a response state");
+      if (response.responseState === "answered") {
+        const answer = response.answer?.trim();
+        if (!answer) throw new Error("ANSWERED requires a nonblank answer");
+        return { ask_id: question.ask_id, response_state: response.responseState, answer };
+      }
+      return { ask_id: question.ask_id, response_state: response.responseState };
+    }),
   };
 }

@@ -22,116 +22,99 @@ from app.domain.intake import (
     IntakeMode,
     ResponseState,
     StructuredAnswer,
+    TargetSecurityInput,
 )
-from app.orchestration.reporting import ReportArtifact
 from app.orchestration.runtime import ReviewRequestContext
 from app.runtime.local import compose_local_runtime, load_dotenv
 from app.schemas.frozen import NonBlankStr, SourceTrace
-
-_VERDICT_VIEW = {
-    "support": ("verified", "근거가 주장을 뒷받침합니다."),
-    "partial_support": ("partial", "일부 근거가 확인됐지만 불확실성이 남아 있습니다."),
-    "contradicted": ("partial", "상충하는 근거가 확인됐습니다."),
-    "unsupported": ("unverified", "주장을 뒷받침할 근거가 확인되지 않았습니다."),
-    "unverifiable": ("unverified", "현재 근거로는 검증할 수 없습니다."),
-}
+from app.ui_projection import build_ui_result, safe_terminal_view
 
 
-class StructuredIntakeRequest(BaseModel):
-    """Closed UI transport DTO for an explicit HybridIntake survey."""
-
+class TargetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    stock_input: NonBlankStr = Field(validation_alias="stockInput")
-    decision_action: Literal["CONSIDER_ENTRY", "HOLD", "CONSIDER_EXIT", "WAIT"] = (
-        Field(validation_alias="decisionAction")
-    )
-    holding_state: Literal["HOLDING", "NOT_HOLDING"] = Field(
-        validation_alias="holdingState"
-    )
-    time_horizon: Literal["SHORT", "MEDIUM", "LONG", "UNDECIDED"] = Field(
-        validation_alias="timeHorizon"
-    )
-    primary_reasons: NonBlankStr = Field(validation_alias="primaryReasons")
-    expected_outcome: NonBlankStr | None = Field(
-        default=None, validation_alias="expectedOutcome"
-    )
-    information_checked: (
-        tuple[
-            Literal[
-                "FINANCIALS",
-                "DISCLOSURE",
-                "NEWS",
-                "PRICE_CHART",
-                "INDUSTRY",
-                "OTHER",
-                "NONE_CHECKED",
-            ],
-            ...,
-        ]
-        | None
-    ) = Field(default=None, validation_alias="informationChecked")
-    counter_evidence_concerns: NonBlankStr | None = Field(
-        default=None, validation_alias="counterEvidenceConcerns"
-    )
-    change_conditions: NonBlankStr | None = Field(
-        default=None, validation_alias="changeConditions"
-    )
+    selected_code: str | None = Field(default=None, validation_alias="selectedCode")
+    name: NonBlankStr | None = None
+    market: Literal["KOSPI", "KOSDAQ"] | None = None
 
     @model_validator(mode="after")
-    def reject_explicit_null_optionals(self):
-        for field_name in (
-            "expected_outcome",
-            "information_checked",
-            "counter_evidence_concerns",
-            "change_conditions",
-        ):
-            if field_name in self.model_fields_set and getattr(self, field_name) is None:
-                raise ValueError(f"{field_name} must be omitted instead of null")
-        if self.information_checked is not None:
-            if len(set(self.information_checked)) != len(self.information_checked):
-                raise ValueError("information_checked must not repeat values")
-            if "NONE_CHECKED" in self.information_checked and len(self.information_checked) != 1:
-                raise ValueError("NONE_CHECKED must be selected alone")
+    def exactly_one_identity(self):
+        if (self.selected_code is None) == (self.name is None):
+            raise ValueError("target requires exactly one identity")
+        if self.market is not None and self.selected_code is None:
+            raise ValueError("market requires selected_code")
         return self
 
 
-def _survey_answer(slot_id: int, value: str | tuple[str, ...]) -> StructuredAnswer:
-    return StructuredAnswer(
-        slot_id=slot_id,
-        value=value,
-        source=SourceTrace.SURVEY,
-        response_state=ResponseState.ANSWERED,
-    )
+class StructuredResponseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    slot_id: int = Field(validation_alias="slotId", ge=1, le=8)
+    response_state: ResponseState = Field(validation_alias="responseState")
+    value: str | tuple[str, ...] | None = None
+
+    @model_validator(mode="after")
+    def response_state_matches_value(self):
+        if self.response_state is ResponseState.ANSWERED and self.value is None:
+            raise ValueError("ANSWERED requires value")
+        if self.response_state is not ResponseState.ANSWERED and self.value is not None:
+            raise ValueError(f"{self.response_state.value} must not carry value")
+        return self
+
+
+class CanonicalIntakeRequest(BaseModel):
+    """Closed UI transport mirroring HybridIntake without client-owned provenance."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: IntakeMode
+    target: TargetRequest | None = None
+    structured: tuple[StructuredResponseRequest, ...] = ()
+    free_text: tuple[NonBlankStr, ...] = Field(default=(), validation_alias="freeText")
+
+    @model_validator(mode="after")
+    def enforce_mode_shape(self):
+        if "target" in self.model_fields_set and self.target is None:
+            raise ValueError("target must be omitted instead of null")
+        slot_ids = [item.slot_id for item in self.structured]
+        if len(slot_ids) != len(set(slot_ids)):
+            raise ValueError("duplicate structured slot")
+        if self.mode is IntakeMode.SURVEY_FIRST and self.free_text:
+            raise ValueError("SURVEY_FIRST must not carry free text")
+        if self.mode is IntakeMode.CHAT_FIRST and (self.structured or not self.free_text):
+            raise ValueError("CHAT_FIRST requires free text without structured answers")
+        return self
 
 
 def _project_structured_intake(payload: object) -> HybridIntake:
     if not isinstance(payload, dict):
         raise ValueError("structured intake must be an object")
-    request = StructuredIntakeRequest.model_validate(payload)
-    structured = [
-        _survey_answer(1, request.decision_action),
-        _survey_answer(2, request.holding_state),
-        _survey_answer(3, request.time_horizon),
-        _survey_answer(4, request.primary_reasons),
-    ]
-    for slot_id, value in (
-        (5, request.expected_outcome),
-        (6, request.information_checked),
-        (7, request.counter_evidence_concerns),
-        (8, request.change_conditions),
-    ):
-        if value is not None:
-            structured.append(_survey_answer(slot_id, value))
+    request = CanonicalIntakeRequest.model_validate(payload)
+    target = None
+    if request.target is not None:
+        target = TargetSecurityInput(
+            selected_code=request.target.selected_code,
+            name=request.target.name,
+            market=request.target.market,
+            source=SourceTrace.SURVEY,
+        )
+    structured = tuple(
+        StructuredAnswer(
+            slot_id=item.slot_id,
+            value=item.value,
+            source=SourceTrace.SURVEY,
+            response_state=item.response_state,
+        )
+        for item in request.structured
+    )
     return HybridIntake(
         schema_version="hybrid_intake/v1",
-        mode=IntakeMode.HYBRID,
-        structured=tuple(structured),
-        free_text=(
-            FreeTextInput(
-                text=request.stock_input,
-                source=SourceTrace.CHAT_EXPLICIT,
-            ),
+        mode=request.mode,
+        target=target,
+        structured=structured,
+        free_text=tuple(
+            FreeTextInput(text=text, source=SourceTrace.CHAT_EXPLICIT)
+            for text in request.free_text
         ),
     )
 
@@ -191,71 +174,14 @@ def _project_judgment_context(input_body: object) -> dict[str, str]:
 
 async def build_result_view(runtime: Any, state: dict[str, Any]) -> dict[str, Any]:
     """Project persisted canonical artifacts without adding a new judgment."""
-
-    review_store = runtime.deps.review_store
-    node_results = state.get("node_results", [])
-    report_id = state.get("report_id")
-    if not report_id:
-        if any(isinstance(item, str) and ":block:" in item for item in node_results):
-            raise RuntimeError("review terminated without report")
-        raise RuntimeError("published report is missing")
-    report_body = await review_store.get_report(report_id)
-    if report_body is None:
-        raise RuntimeError("published report is missing")
-    report = ReportArtifact.model_validate(report_body)
-
-    evidence_store = runtime.deps.evidence_store
-    claims = await review_store.get_claims(list(state.get("claim_ids", [])))
-    evaluations = await review_store.get_claim_evaluations(
-        list(state.get("claim_evaluation_ids", []))
-    )
-    evaluations_by_claim = {str(item.claim_id): item for item in evaluations}
-
-    claim_views: list[dict[str, str]] = []
-    evidence_ids: list[str] = []
-    for claim in claims:
-        evaluation = evaluations_by_claim.get(str(claim.claim_id))
-        if evaluation is None:
-            continue
-        verdict = evaluation.verdict
-        status, summary = _VERDICT_VIEW[verdict]
-        claim_views.append(
-            {
-                "text": claim.normalized_proposition,
-                "status": status,
-                "summary": summary,
-            }
-        )
-        evidence_ids.extend(str(item.evidence_id) for item in evaluation.citations)
-
-    unique_evidence_ids = list(dict.fromkeys(evidence_ids))
-    evidence = await evidence_store.get_many(unique_evidence_ids)
-    evidence_views = [
-        {
-            "source": item.publisher or item.source_type.upper(),
-            "excerpt": item.raw_span,
-            "url": item.source_url,
-            "publishedAt": item.published_at.isoformat() if item.published_at else None,
-        }
-        for item in evidence
-    ]
-
-    stock = state.get("stock") or {}
-    degraded = bool(report.banners)
+    result = await build_ui_result(runtime, state)
     input_id = state.get("input_id")
     judgment_context = {}
     if isinstance(input_id, str) and input_id:
-        judgment_context = _project_judgment_context(await review_store.get_input(input_id))
-
-    return {
-        "stock": {"code": stock.get("code"), "name": stock.get("name")},
-        "claims": claim_views,
-        "evidence": evidence_views,
-        "finalSummary": "\n\n".join(slot.text for slot in report.rendered_slots),
-        "banners": list(report.banners),
-        "degraded": degraded,
-        "judgmentContext": judgment_context,
-    }
+        judgment_context = _project_judgment_context(
+            await runtime.deps.review_store.get_input(input_id)
+        )
+    return {**result, "judgmentContext": judgment_context}
 
 
 async def serve(read_message: Any, emit: Any, *, runtime: Any) -> None:
@@ -284,6 +210,10 @@ async def serve(read_message: Any, emit: Any, *, runtime: Any) -> None:
         for _ in range(10):
             interrupts = result.get("__interrupt__")
             if not interrupts:
+                terminal = safe_terminal_view(result)
+                if terminal is not None:
+                    await emit(terminal)
+                    return
                 phase = "result_projection"
                 debug_log("review", "result projection started", run_id=run_id)
                 await emit({"kind": "result", "result": await build_result_view(runtime, result)})

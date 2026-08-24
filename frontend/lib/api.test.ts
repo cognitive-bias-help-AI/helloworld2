@@ -16,12 +16,10 @@ test("submitReview posts the structured intake body", async () => {
 
   try {
     await submitReview({
-      stockInput: "삼성전자",
-      decisionAction: "CONSIDER_ENTRY",
-      holdingState: "NOT_HOLDING",
-      timeHorizon: "LONG",
-      primaryReasons: "AI 수요와 실적 개선을 기대합니다.",
-      informationChecked: ["FINANCIALS", "NEWS"],
+      mode: "HYBRID",
+      target: { name: "삼성전자" },
+      structured: [{ slotId: 4, responseState: "answered", value: "AI 수요와 실적 개선을 기대합니다." }],
+      freeText: ["추가로 HBM 공급 부족을 우려합니다."],
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -31,12 +29,10 @@ test("submitReview posts the structured intake body", async () => {
   assert.equal(request.method, "POST");
   assert.deepEqual(await request.json(), {
     intake: {
-      stockInput: "삼성전자",
-      decisionAction: "CONSIDER_ENTRY",
-      holdingState: "NOT_HOLDING",
-      timeHorizon: "LONG",
-      primaryReasons: "AI 수요와 실적 개선을 기대합니다.",
-      informationChecked: ["FINANCIALS", "NEWS"],
+      mode: "HYBRID",
+      target: { name: "삼성전자" },
+      structured: [{ slotId: 4, responseState: "answered", value: "AI 수요와 실적 개선을 기대합니다." }],
+      freeText: ["추가로 HBM 공급 부족을 우려합니다."],
     },
   });
 });

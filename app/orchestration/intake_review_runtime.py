@@ -85,12 +85,20 @@ class HitlResumeEvent(_RuntimeModel):
     event_key: NonBlankStr
     input_id: ULID
     ask_id: ULID
-    raw_answer: NonBlankStr
+    raw_answer: NonBlankStr | None = None
     response_state: ResponseState = ResponseState.ANSWERED
     run_started_at: AwareDatetime
     existing_claim_ids: tuple[ULID, ...] = ()
     issues: tuple[ResolutionIssue, ...] = ()
     hard_blocked: bool = False
+
+    @model_validator(mode="after")
+    def response_state_matches_answer(self):
+        if self.response_state is ResponseState.ANSWERED and self.raw_answer is None:
+            raise ValueError("ANSWERED requires raw_answer")
+        if self.response_state is not ResponseState.ANSWERED and self.raw_answer is not None:
+            raise ValueError(f"{self.response_state.value} must not carry raw_answer")
+        return self
 
 
 IntakeReviewEvent = Annotated[
@@ -206,6 +214,8 @@ def _append_resume_segments(
         result[-1].anchor_end + len(SEMANTIC_ANCHOR_SEPARATOR) if result else 0
     )
     for source in sources:
+        if source.response_state is not ResponseState.ANSWERED:
+            continue
         segment = build_resume_segment(source, anchor_start=cursor)
         result.append(segment)
         cursor = segment.anchor_end + len(SEMANTIC_ANCHOR_SEPARATOR)
@@ -446,6 +456,7 @@ async def process_intake_review(
             slot_id=ask.slot_id,
             issue_id=ask.issue_id,
             raw_text=event.raw_answer,
+            response_state=event.response_state,
         )
         if event.response_state is ResponseState.ANSWERED:
             segment = build_resume_segment(source, anchor_start=0)
