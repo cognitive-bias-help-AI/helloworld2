@@ -19,6 +19,7 @@ from app.models.mlapi_gateway import (
     normalize_base_url,
 )
 from app.models.registry import USD_KRW
+from app.orchestration.drafts import SemanticExtractionDraft
 from app.prompts.registry import system_for
 
 
@@ -222,6 +223,29 @@ async def test_invoke는_slot별_OpenAI_structured_output_contract를_사용한�
     assert usage.cache_write_tokens == 0
     assert usage.output_tokens == 20
     assert usage.ctx_chars == ctx_chars(view)
+
+
+@pytest.mark.asyncio
+async def test_SemanticExtractionDraft_response_format은_MLAPI_호환_schema다():
+    outcomes = {
+        slot: _response(SemanticExtractionDraft(units=[])) for slot in _endpoints()
+    }
+    gateway, clients, _ = _gateway(outcomes)
+
+    parsed, _ = await gateway.invoke(
+        "SMALL", "n3/v2", InputView(statement="검토"), SemanticExtractionDraft
+    )
+
+    assert parsed == SemanticExtractionDraft(units=[])
+    response_format = clients["SMALL"].completions.requests[0]["response_format"]
+    span_schema = response_format.model_json_schema()["$defs"]["SemanticUnitDraft"][
+        "properties"
+    ]["span_offset"]
+    assert span_schema["type"] == "array"
+    assert span_schema["items"] == {"type": "integer"}
+    assert span_schema["minItems"] == 2
+    assert span_schema["maxItems"] == 2
+    assert "prefixItems" not in span_schema
 
 
 @pytest.mark.parametrize(

@@ -14,10 +14,14 @@ from app.domain.intake import (
 from app.domain.semantic import SemanticKind
 from app.domain.stock_scope import InstrumentCandidate
 from app.orchestration.checkpoint import MeasuringInMemorySaver
-from app.orchestration.drafts import SemanticExtractionDraft, SemanticUnitDraft
+from app.orchestration.drafts import (
+    GuardScanResult,
+    SemanticExtractionDraft,
+    SemanticUnitDraft,
+)
 from app.orchestration.graph import VERTICES, build_graph
 from app.orchestration.runtime import ReviewRequestContext
-from app.schemas.frozen import SourceTrace, Usage
+from app.schemas.frozen import ReasonCode, SourceTrace, Usage
 from tests.s0.fakes import FixtureStockResolver
 from tests.s0.runtime_fixtures import RAW, FlowGateway, deps, initial_state
 
@@ -67,6 +71,21 @@ class AdaptiveGateway(FlowGateway):
         )
 
 
+class InputInsufficientContextGateway(FlowGateway):
+    async def invoke(self, slot, prompt_version, input_view, output_schema):
+        if output_schema is GuardScanResult:
+            self.calls.append(("n1", input_view))
+            return GuardScanResult(reason_code=ReasonCode.INPUT_INSUFFICIENT), Usage(
+                model_slot=slot, prompt_tokens=0, output_tokens=0, ctx_chars=1
+            )
+        if output_schema is SemanticExtractionDraft:
+            self.calls.append(("n3", input_view))
+            return SemanticExtractionDraft(units=[]), Usage(
+                model_slot=slot, prompt_tokens=0, output_tokens=0, ctx_chars=1
+            )
+        return await super().invoke(slot, prompt_version, input_view, output_schema)
+
+
 def answer_interrupt(paused):
     questions = paused["__interrupt__"][0].value["questions"]
     answer_by_slot = {
@@ -87,6 +106,55 @@ def answer_interrupt(paused):
 async def test_production_topology는_legacy_n3_n4_n3b를_intake_review로_교체한다():
     assert "intake_review" in VERTICES
     assert {"n3", "n4", "n3b"}.isdisjoint(VERTICES)
+
+
+@pytest.mark.asyncio
+async def test_input_insufficient와_명시적_무응답은_context_only_report를_생성한다():
+    resolver = FixtureStockResolver(
+        {},
+        exact_rows={
+            "005930": [
+                InstrumentCandidate(
+                    code="005930",
+                    name="삼성전자",
+                    market="KOSPI",
+                    asset_type="COMMON_STOCK",
+                )
+            ]
+        },
+    )
+    gateway = InputInsufficientContextGateway()
+    runtime_deps = deps(gateway=gateway, resolver=resolver)
+    intake = HybridIntake(
+        schema_version="hybrid_intake/v1",
+        mode=IntakeMode.HYBRID,
+        target=TargetSecurityInput(selected_code="005930", source=SourceTrace.SURVEY),
+        structured=tuple(
+            StructuredAnswer(
+                slot_id=slot_id,
+                value=None,
+                source=SourceTrace.SURVEY,
+                response_state=ResponseState.USER_DECLINED,
+            )
+            for slot_id in range(1, 9)
+        ),
+        free_text=(
+            FreeTextInput(text="추가 판단 근거 없음", source=SourceTrace.CHAT_EXPLICIT),
+        ),
+    )
+
+    result = await build_graph(runtime_deps).ainvoke(
+        initial_state(), context=ReviewRequestContext(intake=intake)
+    )
+
+    assert "n1:input_insufficient" in result["node_results"]
+    assert "n2:ok" in result["node_results"]
+    assert "intake_review:context_only" in result["node_results"]
+    assert result["claim_ids"] == []
+    assert result["query_ids"] == []
+    assert result["collections"] == {}
+    assert result["report_id"]
+    assert await runtime_deps.review_store.get_report(result["report_id"]) is not None
 
 
 @pytest.mark.asyncio

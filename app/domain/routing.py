@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from enum import StrEnum
 
 from app.domain.hitl_policy import AskTarget
-from app.domain.missing import MissingInformation
+from app.domain.missing import MissingInformation, MissingKind
 from app.domain.slot_resolution import CurrentSlotProjection
 from app.domain.slots import SLOT_REGISTRY
 
@@ -51,7 +51,10 @@ def decide_routing(
         return RoutingOutcome.BLOCKED
     if target_items:
         return RoutingOutcome.NEEDS_HITL
-    if any(item.blocking for item in missing_items):
+    if any(
+        item.kind in {MissingKind.AMBIGUOUS, MissingKind.CONFLICT}
+        for item in missing_items
+    ):
         return RoutingOutcome.BLOCKED
     if verifiable_claim_count:
         return RoutingOutcome.READY_FOR_EVIDENCE

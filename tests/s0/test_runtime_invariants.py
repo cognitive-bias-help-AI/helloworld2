@@ -79,6 +79,17 @@ class BlockingGateway(FlowGateway):
         return await super().invoke(slot, prompt_version, input_view, output_schema)
 
 
+class PiiBlockingGateway(FlowGateway):
+    async def invoke(self, slot, prompt_version, input_view, output_schema):
+        if output_schema is GuardScanResult:
+            from app.schemas.frozen import ReasonCode, Usage
+
+            return GuardScanResult(reason_code=ReasonCode.PII_DETECTED), Usage(
+                model_slot=slot, prompt_tokens=0, output_tokens=0, ctx_chars=1
+            )
+        return await super().invoke(slot, prompt_version, input_view, output_schema)
+
+
 @pytest.mark.asyncio
 async def test_I6_fatal_guard는_후속_call없이_n12로_직행한다():
     gateway = BlockingGateway()
@@ -87,3 +98,12 @@ async def test_I6_fatal_guard는_후속_call없이_n12로_직행한다():
     )
     assert gateway.calls == []
     assert result["node_results"] == ["n0:ok", "n1:block:prompt_injection", "n12:end"]
+
+
+@pytest.mark.asyncio
+async def test_I6_PII_guard도_기존대로_n12로_직행한다():
+    result = await build_graph(deps(gateway=PiiBlockingGateway())).ainvoke(
+        initial_state(), context=ReviewRequestContext(raw_text=RAW)
+    )
+
+    assert result["node_results"] == ["n0:ok", "n1:block:pii_detected", "n12:end"]

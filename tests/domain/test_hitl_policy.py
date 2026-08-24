@@ -57,12 +57,18 @@ def test_already_asked_S8은_반복_질문하지_않는다():
 
 @pytest.mark.parametrize(
     "response_state",
-    [ResponseState.USER_DECLINED, ResponseState.UNDECIDED],
+    [ResponseState.UNDECIDED, ResponseState.USER_DECLINED],
 )
-def test_declined와_undecided_response는_질문대상에서_제외한다(response_state):
+def test_undecided_declined_response는_질문대상에서_제외한다(response_state):
     missing = missing_for(8, changes={8: {"response_state": response_state}})
 
     assert select_ask_targets(missing) == ()
+
+
+def test_질문에_UNKNOWN으로_답한_slot은_다시_질문하지_않는다():
+    missing = missing_for(8, changes={8: {"response_state": ResponseState.UNKNOWN}})
+
+    assert select_ask_targets(missing, HitlContext(already_asked_slot_ids=(8,))) == ()
 
 
 def test_S3_canonical_UNDECIDED_answered는_Missing도_AskTarget도_없다():

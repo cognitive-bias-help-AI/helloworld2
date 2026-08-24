@@ -2,7 +2,7 @@ from itertools import permutations
 
 import pytest
 
-from app.domain.hitl_policy import select_ask_targets
+from app.domain.hitl_policy import HitlContext, select_ask_targets
 from app.domain.intake import ResponseState
 from app.domain.missing import analyze_missing
 from app.domain.routing import RoutingOutcome, decide_routing
@@ -34,6 +34,10 @@ def projection(
         slot_id=slot_id,
         status=status,
         values=VALUES[slot_id] if status is CurrentSlotStatus.RESOLVED else (),
+        issue_ids=("issue-1",) if status in {
+            CurrentSlotStatus.AMBIGUOUS,
+            CurrentSlotStatus.CONFLICT,
+        } else (),
         response_state=response_state,
     )
 
@@ -121,14 +125,69 @@ def test_질문하지_않는_optional_missing은_CONTEXT_ONLY를_막지_않는�
     )
 
 
-def test_declined_blocking은_AskTarget이_없어도_BLOCKED다():
+@pytest.mark.parametrize(
+    "response_state",
+    [ResponseState.UNDECIDED, ResponseState.USER_DECLINED],
+)
+def test_답변하지_않은_blocking_absence는_Claim이_있으면_READY다(response_state):
     projections = list(all_resolved())
     projections[0] = projection(
         1,
         status=CurrentSlotStatus.ABSENT,
+        response_state=response_state,
+    )
+    missing, ask_targets = policy_inputs(projections)
+
+    assert ask_targets == ()
+    assert (
+        decide_routing(
+            projections,
+            missing,
+            ask_targets,
+            verifiable_claim_count=1,
+            hard_blocked=False,
+        )
+        is RoutingOutcome.READY_FOR_EVIDENCE
+    )
+
+
+def test_답변하지_않은_blocking_absence와_Claim_0은_CONTEXT_ONLY다():
+    projections = list(all_resolved())
+    projections[3] = projection(
+        4,
+        status=CurrentSlotStatus.ABSENT,
         response_state=ResponseState.USER_DECLINED,
     )
     missing, ask_targets = policy_inputs(projections)
+
+    assert ask_targets == ()
+    assert (
+        decide_routing(
+            projections,
+            missing,
+            ask_targets,
+            verifiable_claim_count=0,
+            hard_blocked=False,
+        )
+        is RoutingOutcome.CONTEXT_ONLY
+    )
+
+
+@pytest.mark.parametrize(
+    "status",
+    [CurrentSlotStatus.AMBIGUOUS, CurrentSlotStatus.CONFLICT],
+)
+def test_질문할_수_없는_모호성이나_충돌은_BLOCKED다(status):
+    projections = list(all_resolved())
+    projections[0] = projection(
+        1,
+        status=status,
+        response_state=ResponseState.USER_DECLINED,
+    )
+    missing = analyze_missing(to_missing_observations(projections))
+    ask_targets = select_ask_targets(
+        missing, HitlContext(already_asked_slot_ids=(1,))
+    )
 
     assert ask_targets == ()
     assert (

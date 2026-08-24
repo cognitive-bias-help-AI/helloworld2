@@ -178,3 +178,39 @@ def test_SemanticExtractionDraft는_typed_units를_JSON_safe하게_감싼다():
     assert draft.model_dump(mode="json")["units"][0]["proposed_value"] == ["NEWS"]
     with pytest.raises(ValidationError):
         SemanticExtractionDraft(units=[unit], verifiable=True)
+
+
+def test_SemanticExtractionDraft_span_offset_schema는_MLAPI_array_items_형식이다():
+    schema = SemanticExtractionDraft.model_json_schema()
+    span_schema = schema["$defs"]["SemanticUnitDraft"]["properties"]["span_offset"]
+
+    assert span_schema["type"] == "array"
+    assert span_schema["items"] == {"type": "integer"}
+    assert span_schema["minItems"] == 2
+    assert span_schema["maxItems"] == 2
+    assert "prefixItems" not in span_schema
+
+
+@pytest.mark.parametrize("span_offset", [[-1, 5], [5, 5], [5, 4], [1], [1, 2, 3]])
+def test_SemanticUnitDraft_wire_span_offset도_정확한_정방향_두_정수다(span_offset):
+    with pytest.raises(ValidationError):
+        SemanticUnitDraft(
+            segment_id="free_text:0",
+            slot_id=2,
+            text_span="보유 중",
+            span_offset=span_offset,
+            normalized_proposition=None,
+            proposed_value="HOLDING",
+            semantic_kind=SemanticKind.USER_STATE,
+        )
+
+    valid = SemanticUnitDraft(
+        segment_id="free_text:0",
+        slot_id=2,
+        text_span="보유 중",
+        span_offset=[0, 5],
+        normalized_proposition=None,
+        proposed_value="HOLDING",
+        semantic_kind=SemanticKind.USER_STATE,
+    )
+    assert valid.span_offset == (0, 5)

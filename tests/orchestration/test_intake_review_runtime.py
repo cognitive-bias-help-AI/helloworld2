@@ -582,7 +582,7 @@ async def test_resume는_AskRecord_target과_issue를_USER_CONFIRMED_observation
 
 
 @pytest.mark.asyncio
-async def test_USER_DECLINED_resume는_재질문하지_않고_blocking이면_BLOCKED다():
+async def test_USER_DECLINED_resume는_재질문하거나_단순_missing으로_BLOCK하지_않는다():
     store = MemoryReviewStore()
     input_id = await stored_input(
         store,
@@ -617,5 +617,5 @@ async def test_USER_DECLINED_resume는_재질문하지_않고_blocking이면_BLO
         model_gateway=Gateway([]),
     )
 
-    assert result.routing_outcome is RoutingOutcome.BLOCKED
+    assert result.routing_outcome is RoutingOutcome.CONTEXT_ONLY
     assert 2 not in {item.slot_id for item in result.ask_targets}

@@ -1,8 +1,8 @@
 """Closed LLM output contracts owned by orchestration nodes."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, WithJsonSchema, field_validator, model_validator
 
 from app.domain.semantic import SemanticKind
 from app.schemas.frozen import ULID, CitationRef, NonBlankStr, ReasonCode, SlotId, Violation
@@ -10,6 +10,19 @@ from app.schemas.frozen import ULID, CitationRef, NonBlankStr, ReasonCode, SlotI
 
 class OutputModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True)
+
+
+SpanOffsetDraft = Annotated[
+    tuple[int, int],
+    WithJsonSchema(
+        {
+            "type": "array",
+            "items": {"type": "integer"},
+            "minItems": 2,
+            "maxItems": 2,
+        }
+    ),
+]
 
 
 class GuardScanResult(OutputModel):
@@ -26,7 +39,7 @@ class GuardScanResult(OutputModel):
 class ExtractedClaimDraft(OutputModel):
     slot_id: SlotId
     user_text_span: NonBlankStr
-    span_offset: tuple[int, int]
+    span_offset: SpanOffsetDraft
     normalized_proposition: NonBlankStr
     verifiable: bool
 
@@ -41,7 +54,7 @@ class SemanticUnitDraft(OutputModel):
     segment_id: NonBlankStr
     slot_id: SlotId
     text_span: NonBlankStr
-    span_offset: tuple[int, int]
+    span_offset: SpanOffsetDraft
     normalized_proposition: NonBlankStr | None
     proposed_value: str | tuple[str, ...] | None
     semantic_kind: SemanticKind

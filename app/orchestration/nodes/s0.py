@@ -186,7 +186,12 @@ def make_nodes(deps: RuntimeDeps):
             GuardScanView(masked_input=body["masked_security_input"]),
             GuardScanResult,
         )
-        suffix = "ok" if result.reason_code is None else f"block:{result.reason_code.value}"
+        if result.reason_code is None:
+            suffix = "ok"
+        elif result.reason_code is ReasonCode.INPUT_INSUFFICIENT:
+            suffix = result.reason_code.value
+        else:
+            suffix = f"block:{result.reason_code.value}"
         return {"node_results": [f"n1:{suffix}"], "counters": {"llm_calls": 1}}
 
     async def n2(state: ReviewState):
