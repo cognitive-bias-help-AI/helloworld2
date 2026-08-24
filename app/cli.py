@@ -28,6 +28,7 @@ from langgraph.types import Command
 from app.runtime.local import (
     DEFAULT_CORP_CACHE,
     DEFAULT_DIRECTORY,
+    DEFAULT_STOCK_MASTER,
     compose_local_runtime,
     initial_state,
     load_dotenv,
@@ -163,17 +164,59 @@ async def _corp_code(out_path: Path) -> int:
     return 0
 
 
+async def _krx_master_sync(out_path: Path, as_of: str | None) -> int:
+    import os
+
+    import httpx
+
+    from providers.krx.client import KrxClient
+    from providers.krx.sync import sync_stock_master
+
+    api_key = os.environ.get("KRX_API_KEY", "").strip()
+    if not api_key:
+        _out("KRX_API_KEY 가 없다. .env 를 확인하라.")
+        return 1
+    async with httpx.AsyncClient() as client:
+        snapshot = await sync_stock_master(
+            KrxClient(client, api_key=api_key),
+            out_path,
+            as_of=as_of,
+        )
+    _out(f"KRX 종목 {snapshot.record_count}건을 {out_path} 에 저장했다.")
+    _out(f"  기준일: {snapshot.as_of}")
+    return 0
+
+
 # ══════════════════════════════════════════════════════════════════
 # resolve
 # ══════════════════════════════════════════════════════════════════
 
-def _resolve(text: str, directory: Path) -> int:
-    from app.domain.stock_directory import CsvStockDirectory
+def _resolve(
+    text: str,
+    directory: Path | None,
+    stock_master: Path,
+    alias_overlay: Path,
+) -> int:
+    if directory is not None:
+        from app.domain.stock_directory import CsvStockDirectory
 
-    candidates = CsvStockDirectory.from_csv(directory).resolve(text)
+        resolver = CsvStockDirectory.from_csv(directory)
+    else:
+        from app.domain.stock_master import (
+            StockMasterResolver,
+            load_alias_overlay,
+            load_stock_master,
+        )
+
+        snapshot = load_stock_master(stock_master)
+        resolver = StockMasterResolver(
+            snapshot,
+            aliases=load_alias_overlay(alias_overlay, snapshot.records),
+        )
+    candidates = resolver.resolve(text)
     if not candidates:
         _out(f"'{text}' 에서 종목을 찾지 못했다.")
-        _out(f"→ {directory} 에 등록된 종목만 해석된다(데모 seed).")
+        _out(f"→ {directory or stock_master} 에 등록된 종목만 해석된다.")
         return 1
     for item in candidates:
         _out(
@@ -225,9 +268,18 @@ def _render_interrupt(payload: object) -> object:
     return _ask("재개 값(JSON) > ")
 
 
-async def _review(text: str, directory: Path, corp_cache: Path) -> int:
+async def _review(
+    text: str,
+    directory: Path | None,
+    stock_master: Path,
+    alias_overlay: Path,
+    corp_cache: Path,
+) -> int:
     async with compose_local_runtime(
-        directory_path=directory, corp_cache=corp_cache
+        directory_path=directory,
+        stock_master_path=stock_master,
+        alias_overlay_path=alias_overlay,
+        corp_cache=corp_cache,
     ) as runtime:
         from app.orchestration.runtime import ReviewRequestContext
 
@@ -314,8 +366,16 @@ async def _print_report(runtime, result: dict) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="app.cli", description="투자 판단 검토 로컬 실행")
     parser.add_argument("--env", default=".env", help="환경변수 파일 (기본 .env)")
+    parser.add_argument("--directory", help="명시적 demo/test 종목 CSV 경로")
     parser.add_argument(
-        "--directory", default=str(DEFAULT_DIRECTORY), help="종목 CSV 경로"
+        "--stock-master",
+        default=str(DEFAULT_STOCK_MASTER),
+        help="검증된 KRX stock-master snapshot 경로",
+    )
+    parser.add_argument(
+        "--alias-overlay",
+        default=str(DEFAULT_DIRECTORY),
+        help="검색 alias overlay CSV 경로",
     )
     parser.add_argument(
         "--corp-cache", default=str(DEFAULT_CORP_CACHE), help="DART corp-code 캐시 경로"
@@ -323,6 +383,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("preflight", help="구조화 출력 스키마 수용 여부 확인")
     sub.add_parser("corp-code", help="DART corp-code 매핑 내려받아 캐시")
+    krx_parser = sub.add_parser("krx-master-sync", help="KRX stock master 동기화")
+    krx_parser.add_argument("--as-of", help="기준일 YYYYMMDD; 없으면 최근 7일 탐색")
     resolve_parser = sub.add_parser("resolve", help="종목 해석만 확인")
     resolve_parser.add_argument("text")
     review_parser = sub.add_parser("review", help="그래프를 끝까지 실행")
@@ -334,19 +396,25 @@ def main(argv: list[str] | None = None) -> int:
     if loaded:
         _out(f"{args.env} 에서 환경변수 {loaded}개 로드")
 
-    directory = Path(args.directory)
+    directory = Path(args.directory) if args.directory else None
+    stock_master = Path(args.stock_master)
+    alias_overlay = Path(args.alias_overlay)
     corp_cache = Path(args.corp_cache)
 
     # 설정 누락은 버그가 아니라 준비 부족이다. 트레이스백 대신 할 일을 알려준다.
     try:
         if args.command == "resolve":
-            return _resolve(args.text, directory)
+            return _resolve(args.text, directory, stock_master, alias_overlay)
         if args.command == "preflight":
             return asyncio.run(_preflight())
         if args.command == "corp-code":
             return asyncio.run(_corp_code(corp_cache))
+        if args.command == "krx-master-sync":
+            return asyncio.run(_krx_master_sync(stock_master, args.as_of))
         if args.command == "review":
-            return asyncio.run(_review(args.text, directory, corp_cache))
+            return asyncio.run(
+                _review(args.text, directory, stock_master, alias_overlay, corp_cache)
+            )
     except (RuntimeError, FileNotFoundError, ValueError) as exc:
         _out(f"중단: {exc}")
         return 1

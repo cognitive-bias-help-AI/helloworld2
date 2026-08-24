@@ -41,6 +41,11 @@ import anthropic
 import httpx
 
 from app.domain.stock_directory import CsvStockDirectory
+from app.domain.stock_master import (
+    StockMasterResolver,
+    load_alias_overlay,
+    load_stock_master,
+)
 from app.gateway.adapters.dart import DartAdapter
 from app.gateway.adapters.kiwoom import KiwoomAdapter
 from app.gateway.adapters.naver import NaverAdapter
@@ -67,6 +72,7 @@ from providers.kiwoom.core import KiwoomAdapter as KiwoomCoreAdapter
 from providers.kiwoom.core import KiwoomCredentials
 
 DEFAULT_DIRECTORY = Path("data/stock_directory.csv")
+DEFAULT_STOCK_MASTER = Path("data/krx_stock_master.json")
 DEFAULT_CORP_CACHE = Path("data/dart_corp_code.json")
 
 
@@ -206,7 +212,9 @@ def _mlapi_endpoints() -> dict[str, MlApiEndpoint]:
 @asynccontextmanager
 async def compose_local_runtime(
     *,
-    directory_path: str | Path = DEFAULT_DIRECTORY,
+    directory_path: str | Path | None = None,
+    stock_master_path: str | Path = DEFAULT_STOCK_MASTER,
+    alias_overlay_path: str | Path = DEFAULT_DIRECTORY,
     corp_cache: str | Path = DEFAULT_CORP_CACHE,
     anthropic_client: anthropic.AsyncAnthropic | None = None,
     http_client: httpx.AsyncClient | None = None,
@@ -243,12 +251,18 @@ async def compose_local_runtime(
     try:
         adapters, missing, notes = _adapters(client, corp_cache=Path(corp_cache))
         checkpointer = MeasuringInMemorySaver()
+        if directory_path is not None:
+            stock_resolver = CsvStockDirectory.from_csv(directory_path)
+        else:
+            stock_master = load_stock_master(stock_master_path)
+            aliases = load_alias_overlay(alias_overlay_path, stock_master.records)
+            stock_resolver = StockMasterResolver(stock_master, aliases=aliases)
         deps = RuntimeDeps(
             review_store=MemoryReviewStore(),
             evidence_store=MemoryEvidenceStore(),
             provider_admission=ProviderAdmissionController(_capacities(adapters)),
             model_gateway=model_gateway,
-            stock_resolver=CsvStockDirectory.from_csv(directory_path),
+            stock_resolver=stock_resolver,
             adapters=adapters,
             clock=lambda: datetime.now(UTC),
             id_factory=lambda: uuid4().hex[:26].upper(),
@@ -298,6 +312,7 @@ def initial_state(run_id: str, thread_id: str, *, now: datetime | None = None) -
 __all__ = [
     "DEFAULT_CORP_CACHE",
     "DEFAULT_DIRECTORY",
+    "DEFAULT_STOCK_MASTER",
     "LocalRuntime",
     "compose_local_runtime",
     "initial_state",

@@ -5,10 +5,18 @@ import os
 import httpx
 import pytest
 
+from app.domain.stock_master import StockMasterResolver, write_stock_master_atomic
 from app.models.anthropic_gateway import AnthropicModelGateway
 from app.models.mlapi_gateway import MlApiModelGateway
 from app.orchestration.state import ReviewState
-from app.runtime.local import _capacities, compose_local_runtime, initial_state, load_dotenv
+from app.runtime.local import (
+    DEFAULT_DIRECTORY,
+    _capacities,
+    compose_local_runtime,
+    initial_state,
+    load_dotenv,
+)
+from tests.domain.test_stock_master import snapshot
 
 
 def test_initial_state가_ReviewState의_모든_채널을_채운다():
@@ -107,6 +115,7 @@ async def test_injected_Anthropic_client는_environment_API_key를_요구하지_
     async with httpx.AsyncClient() as http_client, compose_local_runtime(
         anthropic_client=injected,
         http_client=http_client,
+        directory_path=DEFAULT_DIRECTORY,
     ) as runtime:
         assert runtime.deps.model_gateway._client is injected
 
@@ -133,7 +142,8 @@ async def test_MODEL_BACKEND_mlapi는_shared_http_client로_gateway를_조립한
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     async with httpx.AsyncClient() as client, compose_local_runtime(
-        http_client=client
+        http_client=client,
+        directory_path=DEFAULT_DIRECTORY,
     ) as runtime:
         assert isinstance(runtime.deps.model_gateway, MlApiModelGateway)
         assert runtime.deps.model_gateway._client is client
@@ -178,6 +188,7 @@ async def test_MODEL_BACKEND_미설정은_기존_Anthropic_backend를_유지한�
     async with httpx.AsyncClient() as http_client, compose_local_runtime(
         anthropic_client=injected,
         http_client=http_client,
+        directory_path=DEFAULT_DIRECTORY,
     ) as runtime:
         assert isinstance(runtime.deps.model_gateway, AnthropicModelGateway)
         assert runtime.deps.model_gateway._client is injected
@@ -197,11 +208,45 @@ async def test_MODEL_BACKEND_anthropic_명시는_기존_registry와_client_소�
     async with compose_local_runtime(
         anthropic_client=injected,
         http_client=http_client,
+        directory_path=DEFAULT_DIRECTORY,
     ) as runtime:
         assert isinstance(runtime.deps.model_gateway, AnthropicModelGateway)
         assert runtime.model_registry["SMALL"].model_id.startswith("claude-")
     assert not http_client.is_closed
     await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_default_runtime은_KRX_snapshot을_resolver_authority로_사용한다(
+    tmp_path, monkeypatch
+):
+    _set_mlapi_environment(monkeypatch)
+    master = tmp_path / "master.json"
+    aliases = tmp_path / "aliases.csv"
+    write_stock_master_atomic(master, snapshot())
+    aliases.write_text("code,aliases\n005930,삼전\n", encoding="utf-8")
+
+    async with httpx.AsyncClient() as client, compose_local_runtime(
+        http_client=client,
+        stock_master_path=master,
+        alias_overlay_path=aliases,
+    ) as runtime:
+        assert isinstance(runtime.deps.stock_resolver, StockMasterResolver)
+        assert runtime.deps.stock_resolver.resolve("삼전")[0].code == "005930"
+
+
+@pytest.mark.asyncio
+async def test_default_runtime은_snapshot_missing_malformed_empty를_CSV로_fallback하지_않는다(
+    tmp_path, monkeypatch
+):
+    _set_mlapi_environment(monkeypatch)
+    for index, body in enumerate((None, "not-json", '{"records": []}')):
+        master = tmp_path / f"master-{index}.json"
+        if body is not None:
+            master.write_text(body, encoding="utf-8")
+        with pytest.raises((FileNotFoundError, ValueError)):
+            async with compose_local_runtime(stock_master_path=master):
+                pass
 
 
 @pytest.mark.asyncio

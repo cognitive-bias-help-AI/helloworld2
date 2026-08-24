@@ -32,48 +32,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from app.domain.stock_matcher import MatchableStock, StockMatcher, chosung_of, normalize
 from app.domain.stock_scope import AssetType, InstrumentCandidate
 from app.schemas.frozen import StockCandidate
 
 _KRX_CODE: Final = re.compile(r"^[0-9]{5}[0-9A-Z]$")
-_CODE_IN_TEXT: Final = re.compile(r"(?<![0-9A-Z])([0-9]{5}[0-9A-Z])(?![0-9A-Z])")
-_WS: Final = re.compile(r"\s+")
-
-_CHOSUNG: Final = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
-_HANGUL_BASE: Final = 0xAC00
-_HANGUL_LAST: Final = 0xD7A3
-
-_SCORE: Final[dict[str, float]] = {
-    "exact_code": 1.0,
-    "exact_name": 1.0,
-    "alias": 0.9,
-    "prefix": 0.7,
-    "chosung": 0.5,
-}
-_RANK: Final = ("exact_code", "exact_name", "alias", "prefix", "chosung")
-
-
-def normalize(text: str) -> str:
-    """비교용 정규화. 공백·구두점을 없애고 대문자로 맞춘다.
-
-    한글은 대소문자가 없고 영문 종목명(NAVER, POSCO홀딩스)이 섞이므로
-    upper() 로 통일한다.
-    """
-    return _WS.sub("", str(text or "")).replace("·", "").replace("-", "").upper()
-
-
-def chosung_of(text: str) -> str:
-    """한글 문자열의 초성. 한글이 아닌 문자는 그대로 둔다."""
-    out = []
-    for ch in text:
-        point = ord(ch)
-        if _HANGUL_BASE <= point <= _HANGUL_LAST:
-            out.append(_CHOSUNG[(point - _HANGUL_BASE) // 588])
-        elif not ch.isspace():
-            out.append(ch.upper())
-    return "".join(out)
-
-
 @dataclass(frozen=True, slots=True)
 class _Row:
     code: str
@@ -155,25 +118,19 @@ class CsvStockDirectory:
 
     def __init__(self, rows: tuple[_Row, ...]) -> None:
         self._rows = rows
-        self._by_code = {row.code: row for row in rows}
-        self._by_name: dict[str, _Row] = {}
-        self._by_alias: dict[str, _Row] = {}
-        self._by_chosung: dict[str, list[_Row]] = {}
-        for row in rows:
-            self._by_name.setdefault(normalize(row.name), row)
-            for alias in row.aliases:
-                self._by_alias.setdefault(normalize(alias), row)
-            self._by_chosung.setdefault(chosung_of(row.name), []).append(row)
-        # 긴 이름을 먼저 본다 — "삼성전자우" 가 "삼성전자" 에 먹히면 안 된다.
-        self._contains = sorted(
-            [(normalize(row.name), row, "exact_name") for row in rows]
-            + [
-                (normalize(alias), row, "alias")
+        self._matcher = StockMatcher(
+            tuple(
+                MatchableStock(
+                    code=row.code,
+                    name=row.name,
+                    market=row.market,
+                    asset_type=row.asset_type,
+                    aliases=row.aliases,
+                    is_delisted=row.is_delisted,
+                    is_managed=row.is_managed,
+                )
                 for row in rows
-                for alias in row.aliases
-            ],
-            key=lambda item: len(item[0]),
-            reverse=True,
+            )
         )
 
     @classmethod
@@ -184,68 +141,11 @@ class CsvStockDirectory:
 
     def resolve_exact(self, code: str) -> list[InstrumentCandidate]:
         """코드 완전일치. n2 가 사용자 선택 코드를 재확인할 때 쓴다."""
-        row = self._by_code.get(str(code or "").strip())
-        return [row.instrument] if row is not None else []
+        return self._matcher.resolve_exact(code)
 
     def resolve(self, text: str, limit: int = 5) -> list[StockCandidate]:
         """자연어에서 종목 후보를 찾는다. 점수 내림차순, 동점이면 코드순."""
-        if limit <= 0:
-            raise ValueError("limit must be positive")
-        query = str(text or "")
-        found: dict[str, str] = {}
-
-        for code in _CODE_IN_TEXT.findall(query.upper()):
-            if code in self._by_code:
-                found.setdefault(code, "exact_code")
-
-        specificity: dict[str, int] = {}
-        normalized = normalize(query)
-        if normalized:
-            # 🔴 긴 이름을 먼저 찾고 **찾은 자리를 가린다.**
-            #    가리지 않으면 "삼성전자우" 가 "삼성전자" 도 같이 잡고,
-            #    "에코프로비엠" 이 "에코프로" 도 같이 잡는다. 둘 다 오답이다.
-            #    같은 종목명이 문장에 두 번 나오면 두 번째 자리는 남으므로,
-            #    "에코프로와 에코프로비엠" 처럼 실제로 둘 다 언급된 경우는 살아 있다.
-            remaining = normalized
-            for needle, row, kind in self._contains:
-                if not needle or needle not in remaining:
-                    continue
-                remaining = remaining.replace(needle, "\x00", 1)
-                if row.code not in found or len(needle) > specificity.get(row.code, 0):
-                    found[row.code] = kind
-                    specificity[row.code] = len(needle)
-
-            for row in self._rows:
-                if row.code not in found and normalize(row.name).startswith(normalized):
-                    found[row.code] = "prefix"
-                    specificity[row.code] = len(normalized)
-
-            for row in self._by_chosung.get(chosung_of(query), ()):
-                if row.code not in found:
-                    found[row.code] = "chosung"
-                    specificity[row.code] = len(normalized)
-
-        candidates = [
-            StockCandidate(
-                code=code,
-                name=self._by_code[code].name,
-                market=self._by_code[code].market,
-                match_kind=kind,
-                score=_SCORE[kind],
-                is_delisted=self._by_code[code].is_delisted,
-                is_managed=self._by_code[code].is_managed,
-            )
-            for code, kind in found.items()
-        ]
-        # 동점이면 **더 구체적으로 맞은 쪽**(긴 이름)을 앞에 둔다. 코드순은 최후 결정자다.
-        candidates.sort(
-            key=lambda item: (
-                _RANK.index(item.match_kind),
-                -specificity.get(item.code, 0),
-                item.code,
-            )
-        )
-        return candidates[:limit]
+        return self._matcher.resolve(text, limit)
 
 
 __all__ = ["CsvStockDirectory", "chosung_of", "load_rows", "normalize"]
