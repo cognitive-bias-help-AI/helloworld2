@@ -7,7 +7,7 @@ from decimal import Decimal
 @dataclass(frozen=True, slots=True)
 class DartFinancialRecord:
     corp_code: str
-    corp_name: str
+    corp_name: str | None
     receipt_no: str
     account_id: str
     account_name: str
@@ -18,6 +18,10 @@ class DartFinancialRecord:
     business_year: str
     report_code: str
     fs_div: str
+    current_amount: int | None = None
+    prior_amount: int | None = None
+    current_cumulative_amount: int | None = None
+    prior_comparable_amount: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

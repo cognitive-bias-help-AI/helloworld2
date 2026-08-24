@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from app.domain.account_concepts import ACCOUNT_CONCEPTS, dart_account_matches
 from providers.dart.errors import require_success
 from providers.dart.models import DartFinancialRecord
 
@@ -45,9 +46,23 @@ def parse_financial_statement(
         raise ValueError("OpenDART success response requires list")
     records = []
     for row in rows:
-        if not isinstance(row, dict) or row.get("account_nm") not in selected:
+        if not isinstance(row, dict):
             continue
-        required = ("rcept_no", "corp_name", "sj_div", "sj_nm", "account_nm")
+        account_name = row.get("account_nm")
+        account_id_value = row.get("account_id")
+        selected_match = account_name in selected
+        concept_match = any(
+            dart_account_matches(
+                concept,
+                account_name=account_name if isinstance(account_name, str) else "",
+                account_id=account_id_value if isinstance(account_id_value, str) else None,
+            )
+            for concept in ACCOUNT_CONCEPTS
+            if account_name in selected or account_id_value in selected
+        )
+        if not selected_match and not concept_match:
+            continue
+        required = ("rcept_no", "sj_div", "sj_nm", "account_nm")
         if any(not isinstance(row.get(key), str) or not row[key].strip() for key in required):
             raise ValueError("OpenDART financial row lacks required identity fields")
         account_id = row.get("account_id")
@@ -57,7 +72,11 @@ def parse_financial_statement(
         records.append(
             DartFinancialRecord(
                 corp_code=corp_code,
-                corp_name=row["corp_name"],
+                corp_name=(
+                    row["corp_name"].strip()
+                    if isinstance(row.get("corp_name"), str) and row["corp_name"].strip()
+                    else None
+                ),
                 receipt_no=row["rcept_no"],
                 account_id=account_id,
                 account_name=row["account_nm"],
@@ -72,6 +91,10 @@ def parse_financial_statement(
                 business_year=business_year,
                 report_code=report_code,
                 fs_div=fs_div,
+                current_amount=normalize_dart_amount(row.get("thstrm_amount")),
+                prior_amount=normalize_dart_amount(row.get("frmtrm_amount")),
+                current_cumulative_amount=normalize_dart_amount(row.get("thstrm_add_amount")),
+                prior_comparable_amount=normalize_dart_amount(row.get("frmtrm_add_amount")),
             )
         )
     return records

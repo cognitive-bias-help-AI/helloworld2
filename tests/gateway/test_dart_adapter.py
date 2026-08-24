@@ -243,12 +243,18 @@ def test_financial_statement는_요청한_계정만_EvidenceDraft로_parse한다
     assert draft.source_ref == "20260331001234:IS:dart_OperatingIncomeLoss:CFS"
     assert draft.publisher == "삼성전자"
     assert draft.published_at is None
-    assert draft.raw_span == "2025 사업보고서 연결 손익계산서 영업이익: 9,178,955,000,000 KRW"
+    assert draft.raw_span == "2025 사업보고서 연결 손익계산서 영업이익: 당기 9,178,955,000,000 KRW / 전기 값 없음 KRW"
     assert draft.normalized_value == {
         "kind": "financial_statement",
         "account_id": "dart_OperatingIncomeLoss",
         "account_name": "영업이익",
         "value": 9178955000000,
+        "current_value": 9178955000000,
+        "prior_value": None,
+        "current_cumulative_value": None,
+        "prior_comparable_value": None,
+        "comparison_available": False,
+        "change_direction": None,
         "unit": "KRW",
         "business_year": "2025",
         "report_code": "11011",
@@ -256,6 +262,123 @@ def test_financial_statement는_요청한_계정만_EvidenceDraft로_parse한다
         "statement_code": "IS",
         "statement_name": "손익계산서",
     }
+
+
+def test_financial_statement는_당기와전기_비교값을_보존한다():
+    raw = success_response()
+    raw["list"][0].update({
+        "frmtrm_amount": "8,000,000,000,000",
+        "thstrm_add_amount": "9,178,955,000,000",
+        "frmtrm_add_amount": "8,000,000,000,000",
+    })
+    record = parse_financial_statement(
+        raw,
+        corp_code="00126380",
+        business_year="2025",
+        report_code="11011",
+        fs_div="CFS",
+        account_names=("영업이익",),
+    )[0]
+    assert record.current_amount == 9178955000000
+    assert record.prior_amount == 8000000000000
+    assert record.current_cumulative_amount == 9178955000000
+    assert record.prior_comparable_amount == 8000000000000
+
+
+def test_financial_statement의_비교값은_음수와_누락을_그대로_보존한다():
+    raw = success_response()
+    raw["list"][0].update({"thstrm_amount": "-10", "frmtrm_amount": ""})
+    record = parse_financial_statement(
+        raw,
+        corp_code="00126380",
+        business_year="2025",
+        report_code="11011",
+        fs_div="CFS",
+        account_names=("영업이익",),
+    )[0]
+    assert record.current_amount == -10
+    assert record.prior_amount is None
+
+
+def test_financial_statement의_비교값이_비정상이면_fail_closed한다():
+    raw = success_response()
+    raw["list"][0]["frmtrm_amount"] = "not-a-number"
+    with pytest.raises(ValueError, match="invalid DART amount"):
+        parse_financial_statement(
+            raw,
+            corp_code="00126380",
+            business_year="2025",
+            report_code="11011",
+            fs_div="CFS",
+            account_names=("영업이익",),
+        )
+
+
+def test_financial_statement는_명시된_account_id와_name만_채택한다():
+    raw = success_response()
+    raw["list"].append({
+        "rcept_no": "20260331001234",
+        "corp_name": "삼성전자",
+        "sj_div": "IS",
+        "sj_nm": "손익계산서",
+        "account_id": "dart_Unknown",
+        "account_nm": "조정 EBITDA",
+        "thstrm_amount": "999",
+    })
+    records = parse_financial_statement(
+        raw,
+        corp_code="00126380",
+        business_year="2025",
+        report_code="11011",
+        fs_div="CFS",
+        account_names=("영업이익",),
+    )
+    assert [record.account_name for record in records] == ["영업이익"]
+
+
+def test_financial_statement는_OpenDART에_corp_name이_없어도_행을_보존한다():
+    raw = success_response()
+    raw["list"][0].pop("corp_name")
+    record = parse_financial_statement(
+        raw,
+        corp_code="00126380",
+        business_year="2025",
+        report_code="11011",
+        fs_div="CFS",
+        account_names=("영업이익",),
+    )[0]
+    assert record.corp_name is None
+
+
+def test_financial_statement는_허용된_account_id로도_행을_채택한다():
+    raw = success_response()
+    records = parse_financial_statement(
+        raw,
+        corp_code="00126380",
+        business_year="2025",
+        report_code="11011",
+        fs_div="CFS",
+        account_names=("dart_OperatingIncomeLoss",),
+    )
+    assert [record.account_name for record in records] == ["영업이익"]
+
+
+def test_financial_evidence는_당기전기와_결정적방향을_정규화한다():
+    raw = success_response()
+    raw["list"][0]["frmtrm_amount"] = "8,000,000,000,000"
+    record = parse_financial_statement(
+        raw,
+        corp_code="00126380",
+        business_year="2025",
+        report_code="11011",
+        fs_div="CFS",
+        account_names=("영업이익",),
+    )[0]
+    normalized = record_to_evidence_draft(record).normalized_value
+    assert normalized["current_value"] == 9178955000000
+    assert normalized["prior_value"] == 8000000000000
+    assert normalized["comparison_available"] is True
+    assert normalized["change_direction"] == "increase"
 
 
 def test_DART_Core는_raw를_app_type없이_DartFinancialRecord로_parse한다():
@@ -282,6 +405,7 @@ def test_DART_Core는_raw를_app_type없이_DartFinancialRecord로_parse한다()
             business_year="2025",
             report_code="11011",
             fs_div="CFS",
+            current_amount=9178955000000,
         )
     ]
 
@@ -306,7 +430,7 @@ def test_Main_Bridge는_DartFinancialRecord만_EvidenceDraft로_mapping한다():
 
     assert draft.source_type == "dart"
     assert draft.source_ref == "20260331001234:IS:dart_OperatingIncomeLoss:CFS"
-    assert draft.raw_span == "2025 사업보고서 연결 손익계산서 영업이익: 9,178,955,000,000 KRW"
+    assert draft.raw_span == "2025 사업보고서 연결 손익계산서 영업이익: 당기 9,178,955,000,000 KRW / 전기 값 없음 KRW"
 
 
 def test_DART_Core는_disclosure_raw를_DartDisclosureRecord로_parse한다():
@@ -337,7 +461,7 @@ def test_Main_Adapter는_disclosure_record를_metadata_EvidenceDraft로_mapping�
     assert draft.source_url == (
         "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260820001234"
     )
-    assert draft.published_at is None
+    assert draft.published_at == datetime(2026, 8, 20, tzinfo=UTC)
     assert draft.raw_span == "2026-08-20 삼성전자 '단일판매ㆍ공급계약체결' 공시 제출"
     assert draft.normalized_value == {
         "kind": "disclosure",

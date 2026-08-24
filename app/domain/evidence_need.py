@@ -53,7 +53,7 @@ class EvidenceNeed(StrEnum):
 # 신호**이기도 하다. 여기서는 신호로만 쓰고, 값으로 쓰는 것은
 # evidence_planning 의 일이다.
 
-ACCOUNT_TERMS: Final[tuple[str, ...]] = ("매출액", "영업이익", "당기순이익")
+ACCOUNT_TERMS: Final[tuple[str, ...]] = ("매출", "매출액", "영업이익", "순이익", "당기순이익")
 # "실적" 은 계정을 특정하지 않지만 재무제표를 가리키는 것은 분명하다.
 # need = FINANCIAL_STATEMENT + missing = account_names 로 남는 편이
 # UNKNOWN 으로 뭉개는 것보다 보고서에 쓸 말이 많다.

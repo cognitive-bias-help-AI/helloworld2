@@ -151,6 +151,29 @@ def test_baseline_always_plans_dart_kiwoom_and_naver_as_stock_context():
     assert all(q.scope == "stock" and q.claim_id is None and q.intent == "context" for q in queries)
 
 
+def test_baseline_dart_disclosure_uses_deterministic_lookback_from_as_of():
+    queries = plan_baseline_queries(
+        stock_code="005930",
+        stock_name="삼성전자",
+        as_of=datetime(2026, 8, 24, tzinfo=UTC),
+        id_factory=iter([uid(13), uid(14), uid(15)]).__next__,
+        clock=lambda: NOW,
+    )
+    dart = next(q for q in queries if q.provider == "dart")
+    assert dart.scope == "stock"
+    assert dart.claim_id is None
+    assert dart.intent == "context"
+    assert dart.params == {
+        "stock_code": "005930",
+        "bgn_de": "20260225",
+        "end_de": "20260824",
+        "sort": "date",
+        "sort_mth": "desc",
+        "page_no": 1,
+        "page_count": 20,
+    }
+
+
 def test_financial_requirement_plans_primary_and_corroborative_without_inventing_policy_facts():
     result = plan_hybrid_claim(
         claim("2025년 영업이익이 증가했다"),
@@ -185,6 +208,21 @@ def test_missing_financial_year_has_no_primary_query_even_when_corroborative_is_
     assert primary.missing == ("bsns_year",)
     assert primary.query is None
     assert result.has_executable_primary is False
+
+
+def test_missing_year_does_not_hide_resolved_account_concept():
+    result = plan_hybrid_claim(
+        claim("영업이익이 증가했다"),
+        intent(EvidenceCategory.FINANCIAL_PERFORMANCE, topic_terms=["영업이익"]),
+        stock_code="005930",
+        stock_name="삼성전자",
+        as_of=NOW,
+        id_factory=iter([uid(31)]).__next__,
+        clock=lambda: NOW,
+    )
+    primary = next(item for item in result.requirements if item.role is EvidenceRole.PRIMARY)
+    assert primary.status is RequirementStatus.MISSING_USER_FACT
+    assert primary.missing == ("bsns_year",)
 
 
 def test_demand_supply_is_source_limited_and_only_corroborative_query_is_created():

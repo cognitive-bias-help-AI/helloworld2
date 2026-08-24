@@ -36,12 +36,15 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Final
 
+from app.domain.account_concepts import (
+    accepted_dart_account_names,
+    resolve_account_concepts,
+)
 from app.domain.evidence_need import (
-    ACCOUNT_TERMS,
     INDICATOR_FAMILIES,
     EvidenceNeed,
     classify_evidence_need,
@@ -99,6 +102,7 @@ POLICY_FS_DIV: Final = "CFS"          # 연결 — 그룹 실적의 표준 표�
 POLICY_MEASURE: Final = "amount"      # 수급은 금액 기준이 통용된다
 POLICY_UNIT: Final = "million_krw"
 POLICY_ADJUSTED_PRICE: Final = True   # 수정주가 — 액면분할 전후를 잇는다
+DISCLOSURE_LOOKBACK_DAYS: Final = 180  # 분기·반기 공시를 포함하는 최근 맥락 창
 
 
 @dataclass(frozen=True)
@@ -290,7 +294,8 @@ def resolve_parameters(
 
         if need is EvidenceNeed.FINANCIAL_STATEMENT:
             fs_div, fs_ambiguous = _single(text, _FS_DIV)
-            accounts = [name for name in ACCOUNT_TERMS if name in text]
+            concepts = resolve_account_concepts(text)
+            accounts = list(accepted_dart_account_names(concepts))
             if fs_ambiguous:
                 missing.append("fs_div")
             elif fs_div is None:
@@ -408,8 +413,22 @@ def plan_baseline_queries(
     clock: Callable[[], datetime],
 ) -> tuple[Query, ...]:
     """Build the review-level context plan; provider availability is an n6 concern."""
+    end_de = as_of.date()
+    bgn_de = end_de - timedelta(days=DISCLOSURE_LOOKBACK_DAYS)
     specifications = [
-        ("dart", "disclosure_list", {"stock_code": stock_code}),
+        (
+            "dart",
+            "disclosure_list",
+            {
+                "stock_code": stock_code,
+                "bgn_de": bgn_de.strftime("%Y%m%d"),
+                "end_de": end_de.strftime("%Y%m%d"),
+                "sort": "date",
+                "sort_mth": "desc",
+                "page_no": 1,
+                "page_count": 20,
+            },
+        ),
         (
             "naver",
             "news_search",
@@ -589,6 +608,7 @@ def plan_hybrid_claim(
 
 __all__ = [
     "POLICY_ADJUSTED_PRICE",
+    "DISCLOSURE_LOOKBACK_DAYS",
     "POLICY_FS_DIV",
     "POLICY_MEASURE",
     "POLICY_REPORT_CODE",

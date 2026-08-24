@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import ClassVar, Literal
 
 import httpx
@@ -50,12 +50,23 @@ _REASON_CODES = {
 
 
 def record_to_evidence_draft(record: DartFinancialRecord) -> EvidenceDraft:
-    amount = "값 없음" if record.amount is None else f"{record.amount:,}"
+    current = record.current_amount if record.current_amount is not None else record.amount
+    prior = record.prior_amount
+    amount = "값 없음" if current is None else f"{current:,}"
+    prior_text = "값 없음" if prior is None else f"{prior:,}"
+    if current is None or prior is None:
+        change_direction = None
+    elif current > prior:
+        change_direction = "increase"
+    elif current < prior:
+        change_direction = "decrease"
+    else:
+        change_direction = "unchanged"
     unit = f" {record.currency}" if record.currency else ""
     raw_span = (
         f"{record.business_year} {_REPORT_NAMES[record.report_code]} "
         f"{_FS_NAMES[record.fs_div]} {record.statement_name} "
-        f"{record.account_name}: {amount}{unit}"
+        f"{record.account_name}: 당기 {amount}{unit} / 전기 {prior_text}{unit}"
     )
     return EvidenceDraft(
         source_type="dart",
@@ -76,6 +87,12 @@ def record_to_evidence_draft(record: DartFinancialRecord) -> EvidenceDraft:
             "account_id": record.account_id,
             "account_name": record.account_name,
             "value": record.amount,
+            "current_value": current,
+            "prior_value": prior,
+            "current_cumulative_value": record.current_cumulative_amount,
+            "prior_comparable_value": record.prior_comparable_amount,
+            "comparison_available": current is not None and prior is not None,
+            "change_direction": change_direction,
             "unit": record.currency,
             "business_year": record.business_year,
             "report_code": record.report_code,
@@ -96,7 +113,7 @@ def disclosure_to_evidence_draft(record: DartDisclosureRecord) -> EvidenceDraft:
             f"rcpNo={record.receipt_no}"
         ),
         publisher=record.corp_name,
-        published_at=None,
+        published_at=datetime.strptime(record.receipt_date, "%Y%m%d").replace(tzinfo=UTC),
         raw_span=(
             f"{receipt_date} {record.corp_name} '{record.report_name}' 공시 제출"
         ),
