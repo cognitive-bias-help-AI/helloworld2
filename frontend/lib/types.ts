@@ -1,6 +1,10 @@
+import type { DecisionAction, HoldingState, ReviewIntake, TimeHorizon } from "./intake.ts";
+
 export type WorkerMessage =
-  | { kind: "start"; text: string }
+  | { kind: "start"; intake: ReviewIntake }
   | { kind: "resume"; value: unknown };
+
+export type { ReviewIntake } from "./intake.ts";
 
 export type HitlPayload =
   | { candidates: Array<{ selected_code: string; display_name: string; market?: string }> }
@@ -13,6 +17,13 @@ export type ReviewResult = {
   finalSummary: string;
   banners: string[];
   degraded: boolean;
+  judgmentContext: {
+    decisionAction?: DecisionAction;
+    holdingState?: HoldingState;
+    timeHorizon?: TimeHorizon;
+    primaryReasons?: string;
+    expectedOutcome?: string;
+  };
 };
 
 export type ReviewResponse =

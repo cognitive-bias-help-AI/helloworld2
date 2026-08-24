@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+from functools import wraps
+from time import perf_counter
 
 from langgraph.runtime import Runtime
 from langgraph.types import Command, interrupt
@@ -31,6 +33,7 @@ from app.contexts.views import (
     SlotTextView,
     VerifyPacket,
 )
+from app.diagnostics import debug_log
 from app.domain.evidence_need import EvidenceNeed, classify_evidence_need
 from app.domain.intake import (
     FreeTextInput,
@@ -1002,8 +1005,39 @@ def make_nodes(deps: RuntimeDeps):
     async def n12(state: ReviewState):
         return {"node_results": ["n12:end"]}
 
+    def traced(name, node):
+        @wraps(node)
+        async def wrapper(*args, **kwargs):
+            started = perf_counter()
+            debug_log("graph", "START", node=name)
+            try:
+                result = await node(*args, **kwargs)
+            except BaseException as error:
+                debug_log(
+                    "graph", "FAIL", node=name,
+                    exception_type=type(error).__name__, exception_message=str(error),
+                    elapsed_ms=round((perf_counter() - started) * 1000, 1),
+                )
+                raise
+            node_results = result.get("node_results", []) if isinstance(result, dict) else []
+            semantic_result = node_results[-1] if node_results else None
+            reason_code = None
+            routing = None
+            if isinstance(semantic_result, str) and ":block:" in semantic_result:
+                reason_code = semantic_result.split(":block:", 1)[1]
+                routing = "n12"
+            debug_log(
+                "graph", "END", node=name, status="ok",
+                elapsed_ms=round((perf_counter() - started) * 1000, 1),
+                node_results=node_results or None, node_result=semantic_result,
+                reason_code=reason_code, route=routing,
+            )
+            return result
+
+        return wrapper
+
     return {
-        name: value
+        name: traced(name, value)
         for name, value in locals().items()
         if name
         in {"n0", "n1", "n2", "intake_review", "n5", "n6", "n7", "n8", "n9", "n10", "n11", "n12"}

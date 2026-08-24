@@ -7,7 +7,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
+from time import perf_counter
 
+from app.diagnostics import debug_log
 from app.gateway.admission import ProviderAdmissionController
 from app.gateway.assemble import ContractViolation, assemble_evidence
 from app.gateway.execution import ProviderExecutionError
@@ -141,12 +143,22 @@ async def collect_evidence(
             if fatal_stop.is_set():
                 break
             try:
+                started = perf_counter()
+                debug_log(
+                    "provider", "START", provider=provider,
+                    query_id=item.query.query_id, attempt=attempt,
+                )
                 async with provider_admission.acquire(provider):
                     if fatal_stop.is_set():
                         break
                     call = _provider_call(run_id, item.query, clock, id_factory)
                     raw = await item.adapter.acall(item.request)
             except ProviderExecutionError as exc:
+                debug_log(
+                    "provider", "FAIL", provider=provider, attempt=attempt,
+                    error_code=exc.reason_code, http_status=exc.http_status,
+                    elapsed_ms=round((perf_counter() - started) * 1000, 1),
+                )
                 failed_call = call.model_copy(
                     update={"reason_code": exc.reason_code, "http_status": exc.http_status}
                 )
@@ -162,6 +174,11 @@ async def collect_evidence(
                 )
                 break
             except Exception as exc:
+                debug_log(
+                    "provider", "FAIL", provider=provider, attempt=attempt,
+                    exception_type=type(exc).__name__, exception_message=str(exc),
+                    elapsed_ms=round((perf_counter() - started) * 1000, 1),
+                )
                 failed_call = call.model_copy(
                     update={"reason_code": ReasonCode.CONTRACT_VIOLATION}
                 )
@@ -181,6 +198,11 @@ async def collect_evidence(
                 reason_code = None
                 retryable = False
             if reason_code is not None:
+                debug_log(
+                    "provider", "FAIL", provider=provider, attempt=attempt,
+                    error_code=reason_code,
+                    elapsed_ms=round((perf_counter() - started) * 1000, 1),
+                )
                 failed_call = call.model_copy(update={"reason_code": reason_code})
                 await evidence_store.put_provider_calls(run_id, [failed_call])
                 item_calls.append(failed_call)
@@ -209,6 +231,11 @@ async def collect_evidence(
                 fatal_stop.set()
                 break
             fetched, adopted, deduped_count = len(drafts), len(evidence), deduped
+            debug_log(
+                "provider", "END", provider=provider, status="ok", attempt=attempt,
+                items_fetched=fetched, items_adopted=adopted,
+                elapsed_ms=round((perf_counter() - started) * 1000, 1),
+            )
             succeeded = True
             break
         results[item_index] = {

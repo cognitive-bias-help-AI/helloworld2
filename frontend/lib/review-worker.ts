@@ -2,18 +2,24 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-import type { ReviewResponse, WorkerMessage } from "./types.ts";
+import { DECISION_ACTIONS, HOLDING_STATES, TIME_HORIZONS } from "./intake.ts";
+import type { ReviewIntake, ReviewResponse, WorkerMessage } from "./types.ts";
 
 type ChildLike = {
   stdin: Pick<NodeJS.WritableStream, "write">;
   stdout: Pick<NodeJS.ReadableStream, "setEncoding" | "on">;
-  stderr: Pick<NodeJS.ReadableStream, "resume">;
+  stderr: Pick<NodeJS.ReadableStream, "resume" | "setEncoding" | "on">;
   kill(): boolean;
   on(event: "exit" | "error", listener: () => void): unknown;
 };
 
 const sessions = new Map<string, ReviewWorkerSession>();
 const REQUEST_TIMEOUT_MS = 120_000;
+const DEBUG_LOGS = ["1", "true", "yes", "on"].includes((process.env.REVIEW_DEBUG_LOGS ?? "").toLowerCase());
+
+function workerLog(event: string, session: string, detail?: string) {
+  if (DEBUG_LOGS) console.error(`[worker] ${event} session=${session}${detail ? ` ${detail}` : ""}`);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -21,6 +27,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
+}
+
+function isJudgmentContext(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const allowed = new Set(["decisionAction", "holdingState", "timeHorizon", "primaryReasons", "expectedOutcome"]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) return false;
+  return (
+    (value.decisionAction === undefined || DECISION_ACTIONS.includes(value.decisionAction as typeof DECISION_ACTIONS[number])) &&
+    (value.holdingState === undefined || HOLDING_STATES.includes(value.holdingState as typeof HOLDING_STATES[number])) &&
+    (value.timeHorizon === undefined || TIME_HORIZONS.includes(value.timeHorizon as typeof TIME_HORIZONS[number])) &&
+    (value.primaryReasons === undefined || typeof value.primaryReasons === "string") &&
+    (value.expectedOutcome === undefined || typeof value.expectedOutcome === "string")
+  );
 }
 
 function isWorkerResponse(value: unknown): value is ReviewResponse {
@@ -51,7 +70,8 @@ function isWorkerResponse(value: unknown): value is ReviewResponse {
       isNullableString(item.url) && isNullableString(item.publishedAt)) &&
     typeof result.finalSummary === "string" &&
     Array.isArray(result.banners) && result.banners.every((item) => typeof item === "string") &&
-    typeof result.degraded === "boolean"
+    typeof result.degraded === "boolean" &&
+    isJudgmentContext(result.judgmentContext)
   );
 }
 
@@ -80,17 +100,24 @@ export class ReviewWorkerSession {
     this.timeoutMs = timeoutMs;
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => this.onData(chunk));
-    child.on("exit", () => this.finish(new Error("worker exited")));
-    child.on("error", () => this.finish(new Error("worker failed")));
-    child.stderr.resume();
+    child.on("exit", () => { workerLog("EXIT", this.id); this.finish(new Error("worker exited")); });
+    child.on("error", () => { workerLog("PROCESS_ERROR", this.id); this.finish(new Error("worker failed")); });
+    if (DEBUG_LOGS) {
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk: string) => process.stderr.write(chunk));
+    } else child.stderr.resume();
   }
 
   send(message: WorkerMessage): Promise<ReviewResponse> {
     if (this.terminal) return Promise.reject(new Error("session is terminal"));
     if (this.inFlight) return Promise.reject(new Error("request already in flight"));
 
+    workerLog("SEND", this.id, `kind=${message.kind}`);
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.finish(new Error("worker timeout")), this.timeoutMs);
+      const timer = setTimeout(() => {
+        workerLog("TIMEOUT", this.id);
+        this.finish(new Error("worker timeout"));
+      }, this.timeoutMs);
       this.inFlight = { resolve, reject, timer };
       this.child.stdin.write(`${JSON.stringify(message)}\n`, (error) => {
         if (error) this.finish(new Error("worker write failed"));
@@ -114,6 +141,7 @@ export class ReviewWorkerSession {
         }
         response = parsed;
       } catch {
+        workerLog("PROTOCOL_ERROR", this.id);
         this.finish(new Error("invalid worker protocol"));
         return;
       }
@@ -124,6 +152,7 @@ export class ReviewWorkerSession {
       }
       clearTimeout(pending.timer);
       this.inFlight = undefined;
+      workerLog("RECV", this.id, `kind=${response.kind}`);
       pending.resolve(response);
       if (response.kind === "result" || response.kind === "error") this.finish();
     }
@@ -151,19 +180,21 @@ function spawnSession(): ReviewWorkerSession {
     windowsHide: true,
     env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
   });
+  workerLog("SPAWN", id);
   const session = new ReviewWorkerSession(id, child, () => sessions.delete(id));
   sessions.set(id, session);
   return session;
 }
 
-export async function startReview(text: string) {
+export async function startReview(intake: ReviewIntake) {
   const session = spawnSession();
-  const response = await session.send({ kind: "start", text });
+  const response = await session.send({ kind: "start", intake });
   return { sessionId: session.id, ...response };
 }
 
 export async function resumeReview(sessionId: string, value: unknown) {
   const session = sessions.get(sessionId);
+  if (DEBUG_LOGS) console.error(`[session-registry] GET session=${sessionId} found=${Boolean(session)}`);
   if (!session) throw new Error("review session not found");
   return session.send({ kind: "resume", value });
 }

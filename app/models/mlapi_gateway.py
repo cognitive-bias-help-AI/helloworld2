@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import Any, Final, Literal
 from urllib.parse import urlparse
 
@@ -17,6 +18,7 @@ import openai
 from pydantic import BaseModel, ValidationError
 
 from app.contexts.budget import ctx_chars
+from app.diagnostics import debug_log
 from app.models.registry import USD_KRW
 from app.prompts.registry import system_for
 from app.schemas.frozen import ModelSpec, Usage
@@ -172,6 +174,11 @@ class MlApiModelGateway:
             "reasoning_effort": effort,
             "max_completion_tokens": _MAX_COMPLETION_TOKENS[slot],
         }
+        started = perf_counter()
+        debug_log(
+            "model", "START", node=node, slot=slot, model_id=endpoint.model_label,
+            prompt_version=prompt_version, output_schema=output_schema.__name__, attempt=1,
+        )
         try:
             response = await self._sdk_clients[slot].chat.completions.parse(**request)
         except openai.BadRequestError as exc:
@@ -187,6 +194,13 @@ class MlApiModelGateway:
             raise MlApiGatewayError(code) from exc
         except openai.APIError as exc:
             raise MlApiGatewayError("provider") from exc
+        except BaseException as exc:
+            debug_log(
+                "model", "FAIL", node=node, slot=slot,
+                exception_type=type(exc).__name__, exception_message=str(exc),
+                elapsed_ms=round((perf_counter() - started) * 1000, 1),
+            )
+            raise
 
         choices = getattr(response, "choices", None)
         if not isinstance(choices, list) or not choices:
@@ -202,7 +216,21 @@ class MlApiModelGateway:
             raise MlApiOutputUnusable(
                 f"{prompt_version}: response did not contain {output_schema.__name__}"
             )
-        return parsed, _usage(slot, getattr(response, "usage", None), input_view)
+        try:
+            usage = _usage(slot, getattr(response, "usage", None), input_view)
+        except BaseException as exc:
+            debug_log(
+                "model", "FAIL", node=node, slot=slot, output_schema=output_schema.__name__,
+                exception_type=type(exc).__name__, exception_message=str(exc),
+                elapsed_ms=round((perf_counter() - started) * 1000, 1),
+            )
+            raise
+        debug_log(
+            "model", "END", node=node, slot=slot, status="ok",
+            elapsed_ms=round((perf_counter() - started) * 1000, 1),
+            prompt_tokens=usage.prompt_tokens, output_tokens=usage.output_tokens,
+        )
+        return parsed, usage
 
 
 def _payload(input_view: BaseModel) -> str:

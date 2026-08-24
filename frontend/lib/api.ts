@@ -1,4 +1,4 @@
-import type { ReviewResponse } from "./types";
+import type { ReviewIntake, ReviewResponse } from "./types";
 
 async function decode(response: Response): Promise<ReviewResponse & { sessionId?: string }> {
   const body = await response.json();
@@ -6,18 +6,18 @@ async function decode(response: Response): Promise<ReviewResponse & { sessionId?
   return body;
 }
 
-export function submitReview(text: string) {
+export function submitReview(intake: ReviewIntake) {
   return fetch("/api/reviews", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ intake }),
   }).then(decode);
 }
 
 export function resumeReview(sessionId: string, value: unknown) {
-  return fetch(`/api/reviews/${encodeURIComponent(sessionId)}`, {
+  return fetch("/api/reviews", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ value }),
+    body: JSON.stringify({ sessionId, value }),
   }).then(decode);
 }
