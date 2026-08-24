@@ -5,6 +5,8 @@ import os
 import httpx
 import pytest
 
+from app.models.anthropic_gateway import AnthropicModelGateway
+from app.models.mlapi_gateway import MlApiModelGateway
 from app.orchestration.state import ReviewState
 from app.runtime.local import _capacities, compose_local_runtime, initial_state, load_dotenv
 
@@ -114,5 +116,98 @@ async def test_Anthropic_client를_생성할때는_environment_API_key가_필수
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+        async with compose_local_runtime():
+            pass
+
+
+def _set_mlapi_environment(monkeypatch):
+    monkeypatch.setenv("MODEL_BACKEND", "mlapi")
+    for model in ("LUNA", "TERRA", "SOL"):
+        monkeypatch.setenv(f"{model}_API_URL", f"https://{model.lower()}.mlapi.run")
+        monkeypatch.setenv(f"{model}_API_KEY", f"{model.lower()}-key")
+
+
+@pytest.mark.asyncio
+async def test_MODEL_BACKEND_mlapi는_shared_http_client로_gateway를_조립한다(monkeypatch):
+    _set_mlapi_environment(monkeypatch)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    async with httpx.AsyncClient() as client, compose_local_runtime(
+        http_client=client
+    ) as runtime:
+        assert isinstance(runtime.deps.model_gateway, MlApiModelGateway)
+        assert runtime.deps.model_gateway._client is client
+        assert runtime.model_registry["SMALL"].model_id == "gpt-5.6-luna"
+        assert runtime.model_registry["MID"].model_id == "gpt-5.6-terra"
+        assert runtime.model_registry["LARGE"].model_id == "gpt-5.6-sol"
+        assert all(
+            spec.price_cached_in_krw_per_1m is None
+            for spec in runtime.model_registry.values()
+        )
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "LUNA_API_URL",
+        "LUNA_API_KEY",
+        "TERRA_API_URL",
+        "TERRA_API_KEY",
+        "SOL_API_URL",
+        "SOL_API_KEY",
+    ],
+)
+@pytest.mark.asyncio
+async def test_MODEL_BACKEND_mlapi는_각_필수설정_누락을_fail_fast한다(monkeypatch, missing):
+    _set_mlapi_environment(monkeypatch)
+    monkeypatch.delenv(missing)
+
+    with pytest.raises(RuntimeError, match=missing):
+        async with compose_local_runtime():
+            pass
+
+
+@pytest.mark.asyncio
+async def test_MODEL_BACKEND_미설정은_기존_Anthropic_backend를_유지한다(monkeypatch):
+    monkeypatch.delenv("MODEL_BACKEND", raising=False)
+
+    class InjectedClient:
+        pass
+
+    injected = InjectedClient()
+    async with httpx.AsyncClient() as http_client, compose_local_runtime(
+        anthropic_client=injected,
+        http_client=http_client,
+    ) as runtime:
+        assert isinstance(runtime.deps.model_gateway, AnthropicModelGateway)
+        assert runtime.deps.model_gateway._client is injected
+
+
+@pytest.mark.asyncio
+async def test_MODEL_BACKEND_anthropic_명시는_기존_registry와_client_소유권을_유지한다(
+    monkeypatch,
+):
+    monkeypatch.setenv("MODEL_BACKEND", "anthropic")
+
+    class InjectedClient:
+        pass
+
+    injected = InjectedClient()
+    http_client = httpx.AsyncClient()
+    async with compose_local_runtime(
+        anthropic_client=injected,
+        http_client=http_client,
+    ) as runtime:
+        assert isinstance(runtime.deps.model_gateway, AnthropicModelGateway)
+        assert runtime.model_registry["SMALL"].model_id.startswith("claude-")
+    assert not http_client.is_closed
+    await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_알수없는_MODEL_BACKEND는_조용히_fallback하지_않는다(monkeypatch):
+    monkeypatch.setenv("MODEL_BACKEND", "unknown")
+
+    with pytest.raises(RuntimeError, match="MODEL_BACKEND"):
         async with compose_local_runtime():
             pass

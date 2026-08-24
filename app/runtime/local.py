@@ -47,10 +47,17 @@ from app.gateway.adapters.naver import NaverAdapter
 from app.gateway.admission import ProviderAdmissionController
 from app.gateway.protocols import ProviderAdapter
 from app.models.anthropic_gateway import AnthropicModelGateway
+from app.models.mlapi_gateway import (
+    MLAPI_MODEL_BY_SLOT,
+    MlApiEndpoint,
+    MlApiModelGateway,
+)
+from app.models.registry import MODEL_REGISTRY
 from app.orchestration.checkpoint import MeasuringInMemorySaver
 from app.orchestration.graph import build_graph
 from app.orchestration.reporting import RenderCandidateStore
 from app.orchestration.runtime import RuntimeDeps
+from app.schemas.frozen import ModelSpec
 from app.store.memory_evidence_store import MemoryEvidenceStore
 from app.store.memory_review_store import MemoryReviewStore
 from providers.dart.corp_code import DartCorpCodeResolver
@@ -68,6 +75,7 @@ class LocalRuntime:
     deps: RuntimeDeps
     graph: Any
     checkpointer: Any
+    model_registry: Mapping[str, ModelSpec]
     missing: tuple[str, ...] = ()
     notes: tuple[str, ...] = field(default=())
 
@@ -173,6 +181,28 @@ def _capacities(adapters: Mapping[str, ProviderAdapter]) -> dict[str, int]:
     return capacities
 
 
+def _model_backend() -> str:
+    backend = (_env("MODEL_BACKEND") or "anthropic").lower()
+    if backend not in {"anthropic", "mlapi"}:
+        raise RuntimeError("MODEL_BACKEND must be 'anthropic' or 'mlapi'")
+    return backend
+
+
+def _mlapi_endpoints() -> dict[str, MlApiEndpoint]:
+    endpoints: dict[str, MlApiEndpoint] = {}
+    for slot, prefix in (("SMALL", "LUNA"), ("MID", "TERRA"), ("LARGE", "SOL")):
+        url_name = f"{prefix}_API_URL"
+        key_name = f"{prefix}_API_KEY"
+        url = _env(url_name)
+        api_key = _env(key_name)
+        if not url:
+            raise RuntimeError(f"{url_name} is required when MODEL_BACKEND=mlapi")
+        if not api_key:
+            raise RuntimeError(f"{key_name} is required when MODEL_BACKEND=mlapi")
+        endpoints[slot] = MlApiEndpoint(url, api_key, MLAPI_MODEL_BY_SLOT[slot])
+    return endpoints
+
+
 @asynccontextmanager
 async def compose_local_runtime(
     *,
@@ -186,18 +216,28 @@ async def compose_local_runtime(
     HTTP client 와 Anthropic client 는 **만든 쪽이 닫는다.** 주입받은 경우
     닫지 않는다 — production.py 가 shared client 를 다루는 규칙과 같다.
     """
-    if anthropic_client is None and not _env("ANTHROPIC_API_KEY"):
+    backend = _model_backend()
+    mlapi_endpoints = _mlapi_endpoints() if backend == "mlapi" else None
+    if backend == "anthropic" and anthropic_client is None and not _env("ANTHROPIC_API_KEY"):
         raise RuntimeError(
             "ANTHROPIC_API_KEY 가 없다. .env 에 넣거나 환경변수로 export 하라."
         )
 
     owns_http = http_client is None
-    owns_model = anthropic_client is None
+    owns_model = backend == "anthropic" and anthropic_client is None
     client = http_client or httpx.AsyncClient()
     model_client = (
-        anthropic_client
-        if anthropic_client is not None
-        else anthropic.AsyncAnthropic()
+        anthropic_client if anthropic_client is not None else anthropic.AsyncAnthropic()
+    ) if backend == "anthropic" else None
+    model_gateway = (
+        AnthropicModelGateway(model_client)
+        if backend == "anthropic"
+        else MlApiModelGateway(client, endpoints=mlapi_endpoints or {})
+    )
+    model_registry = (
+        MODEL_REGISTRY
+        if backend == "anthropic"
+        else {slot: model_gateway.model_spec_for(slot) for slot in ("SMALL", "MID", "LARGE")}
     )
 
     try:
@@ -207,7 +247,7 @@ async def compose_local_runtime(
             review_store=MemoryReviewStore(),
             evidence_store=MemoryEvidenceStore(),
             provider_admission=ProviderAdmissionController(_capacities(adapters)),
-            model_gateway=AnthropicModelGateway(model_client),
+            model_gateway=model_gateway,
             stock_resolver=CsvStockDirectory.from_csv(directory_path),
             adapters=adapters,
             clock=lambda: datetime.now(UTC),
@@ -218,13 +258,14 @@ async def compose_local_runtime(
             deps=deps,
             graph=build_graph(deps, checkpointer=checkpointer),
             checkpointer=checkpointer,
+            model_registry=model_registry,
             missing=tuple(missing),
             notes=tuple(notes),
         )
     finally:
         if owns_http:
             await client.aclose()
-        if owns_model:
+        if owns_model and model_client is not None:
             await model_client.close()
 
 
