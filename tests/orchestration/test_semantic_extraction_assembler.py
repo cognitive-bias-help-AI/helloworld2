@@ -261,6 +261,25 @@ def test_chat_external은_source_origin의_Claim을_만든다():
     assert result.claims[0].origin is not SourceTrace.LLM_EXTRACTION
 
 
+def test_external_expectation은_Claim으로_보존하되_검증대상에서_제외한다():
+    text = "앞으로 주가가 상승할 것이다"
+    result = assemble(
+        SemanticExtractionDraft(
+            units=[unit(
+                slot_id=5,
+                text_span=text,
+                span=(0, len(text)),
+                kind=SemanticKind.EXTERNAL_EXPECTATION,
+            )]
+        ),
+        segments=(segment("free_text:0", text),),
+    )
+
+    assert result.status is SemanticAssemblyStatus.SUCCESS
+    assert len(result.claims) == 1
+    assert result.claims[0].verifiable is False
+
+
 def test_context_only_USER_PREFERENCE는_Claim을_만들지_않는다():
     text = "장기로 볼 생각이다"
     draft = SemanticExtractionDraft(
@@ -530,6 +549,57 @@ def test_same_span_same_Slot의_external_kind_둘은_contract_failure다():
         assemble(draft, segments=(segment("free_text:0", text),))
 
     assert caught.value.category == "same_span_external_claim"
+
+
+def test_atomic_external_children_suppress_composite_parent_claim():
+    text = "최근 반도체 업황과 회사 실적이 좋아지고 있다"
+    industry = "최근 반도체 업황"
+    financial = "회사 실적이 좋아지고 있다"
+    result = assemble(
+        SemanticExtractionDraft(
+            units=[
+                unit(slot_id=4, text_span=text, span=(0, len(text)), kind=SemanticKind.EXTERNAL_ASSERTION),
+                unit(
+                    slot_id=4, text_span=industry, span=(0, len(industry)),
+                    kind=SemanticKind.EXTERNAL_ASSERTION,
+                    proposition="최근 반도체 업황이 좋아지고 있다",
+                ),
+                unit(
+                    slot_id=4, text_span=financial,
+                    span=(text.index(financial), len(text)),
+                    kind=SemanticKind.EXTERNAL_ASSERTION,
+                    proposition="회사 실적이 좋아지고 있다",
+                ),
+            ]
+        ),
+        segments=(segment("free_text:0", text),),
+    )
+
+    assert result.status is SemanticAssemblyStatus.SUCCESS
+    assert [item.user_text_span for item in result.claims] == [industry, financial]
+
+
+def test_slot7_atomic_concerns_suppress_composite_parent_observation():
+    text = "A가 걱정되고 B도 우려된다"
+    first = "A가 걱정되고"
+    second = "B도 우려된다"
+    result = assemble(
+        SemanticExtractionDraft(
+            units=[
+                unit(slot_id=7, text_span=text, span=(0, len(text)), kind=SemanticKind.SUBJECTIVE_CONCERN),
+                unit(slot_id=7, text_span=first, span=(0, len(first)), kind=SemanticKind.SUBJECTIVE_CONCERN),
+                unit(
+                    slot_id=7, text_span=second,
+                    span=(text.index(second), len(text)),
+                    kind=SemanticKind.SUBJECTIVE_CONCERN,
+                ),
+            ]
+        ),
+        segments=(segment("free_text:0", text),),
+    )
+
+    assert result.status is SemanticAssemblyStatus.SUCCESS
+    assert [item.text_ref.local_end - item.text_ref.local_start for item in result.observations] == [len(first), len(second)]
 
 
 def test_free_text_same_span_different_Slot은_Conflict가_아닌_AMBIGUOUS다():

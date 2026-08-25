@@ -1,5 +1,5 @@
 import type {
-  ClaimVerdict, EvidenceStance, EvidenceView, JudgmentSlotView, ReviewResult,
+  ClaimVerdict, ClaimView, EvidenceStance, EvidenceView, JudgmentSlotView, ProviderCollectionView, ReviewResult,
 } from "./types.ts";
 
 const SLOT_LABELS = [
@@ -43,6 +43,13 @@ const REASON_LABELS: Record<string, string> = {
   source_unavailable: "일부 자료원을 사용할 수 없어 검토 범위가 제한되었습니다.",
   evidence_insufficient: "현재 확보된 자료만으로 충분히 확인하기 어렵습니다.",
 };
+
+const LIMITATION_LABELS = {
+  source_limited: "관련 자료는 확인되었으나 직접 검증 범위가 제한됩니다.",
+  no_result: "현재 검색 조건에서 이 판단을 확인할 자료를 충분히 찾지 못했습니다.",
+  provider_failure: "필요한 자료원에서 데이터를 불러오지 못해 검토가 제한되었습니다.",
+  expectation: "미래에 대한 기대이므로 직접 사실 확인 대상이 아닙니다. 현재 근거의 범위만 점검합니다.",
+} as const;
 
 const BANNER_LABELS: Record<string, string> = {
   coverage_truncated: "일부 근거만 검토되어 판단 범위가 제한되었습니다.",
@@ -94,10 +101,11 @@ function findingMessage(
   kind: "mismatch" | "missing" | "unverified" | "conflict",
   slotLabel: string,
   proposition: string | null,
+  limitation: string | null,
 ): string {
   if (kind === "unverified") {
     return proposition
-      ? `${proposition}\n현재 확보한 자료만으로는 이 판단 근거를 충분히 확인하기 어렵습니다.`
+      ? `${proposition}\n${limitation ?? "현재 확보한 자료만으로는 이 판단 근거를 충분히 확인하기 어렵습니다."}`
       : `${slotLabel}에 필요한 자료를 충분히 확인하지 못했습니다.`;
   }
   if (kind === "mismatch") {
@@ -109,13 +117,38 @@ function findingMessage(
   return `${slotLabel}에 서로 다른 정보가 있어 추가 확인이 필요합니다.`;
 }
 
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function isProviderFailure(collection: ProviderCollectionView): boolean {
+  return collection.status === "MISSING" || [
+    "auth_failed", "ip_mismatch", "rate_limit", "upstream_5xx", "upstream_timeout", "contract_violation",
+  ].includes(collection.reasonCode ?? "");
+}
+
+function claimLimitation(
+  claim: ClaimView,
+  evidence: EvidenceView[],
+  collections: ProviderCollectionView[],
+): keyof typeof LIMITATION_LABELS | null {
+  if (!claim.verifiable) return "expectation";
+  const claimEvidence = evidence.filter((item) => item.relatedClaimIds.includes(claim.claimId));
+  if (claimEvidence.length > 0) {
+    const hasPrimary = claimEvidence.some((item) => item.roles.includes("PRIMARY"));
+    const hasCorroborative = claimEvidence.some((item) => item.roles.includes("CORROBORATIVE"));
+    return !hasPrimary && hasCorroborative ? "source_limited" : null;
+  }
+  return collections.some(isProviderFailure) ? "provider_failure" : "no_result";
+}
+
 function slotView(slot: JudgmentSlotView) {
   return {
     ...slot,
     label: SLOT_LABELS[slot.slotId - 1] ?? `항목 ${slot.slotId}`,
     responseStateLabel: RESPONSE_STATE_LABELS[slot.responseState],
     statusLabel: SLOT_STATUS_LABELS[slot.status],
-    displayValues: slot.values.length ? slot.values : [],
+    displayValues: slot.values.length ? uniqueStrings(slot.values) : [],
   };
 }
 
@@ -130,15 +163,31 @@ function evidenceView(evidence: EvidenceView) {
 
 export function buildReviewResultView(result: ReviewResult) {
   const evidenceById = new Map(result.evidence.map((item) => [item.evidenceId, evidenceView(item)]));
+  const evidence = result.evidence.map(evidenceView);
+  const providerCollections = Object.entries(result.providerCollections).map(([key, collection]) => ({
+    key, ...collection, statusLabel: PROVIDER_STATUS_LABELS[collection.status],
+    reasonLabel: collection.reasonCode ? reasonLabel(collection.reasonCode) : null,
+  }));
   const claims = result.claims.map((claim) => ({
     ...claim,
+    limitationKind: claimLimitation(claim, evidence, providerCollections),
+    limitationLabel: (() => {
+      const kind = claimLimitation(claim, evidence, providerCollections);
+      return kind ? LIMITATION_LABELS[kind] : null;
+    })(),
     slotLabel: SLOT_LABELS[claim.slotId - 1] ?? `항목 ${claim.slotId}`,
     verdictLabel: claim.evaluation
       ? VERDICT_LABELS[claim.evaluation.verdict]
       : "외부 자료로 직접 검증하는 주장으로 분류되지 않았습니다.",
     verdictSymbol: claim.evaluation ? VERDICT_SYMBOLS[claim.evaluation.verdict] : "○",
-    explanation: claim.evaluation ? VERDICT_EXPLANATIONS[claim.evaluation.verdict] : "외부 자료로 직접 검증하는 주장으로 분류되지 않았습니다.",
+    explanation: (() => {
+      const kind = claimLimitation(claim, evidence, providerCollections);
+      return kind ? LIMITATION_LABELS[kind] : claim.evaluation
+        ? VERDICT_EXPLANATIONS[claim.evaluation.verdict]
+        : "외부 자료로 직접 검증하는 주장으로 분류되지 않았습니다.";
+    })(),
     missingDimensions: claim.evaluation?.missingDimensions ?? [],
+    missingDimensionLabels: (claim.evaluation?.missingDimensions ?? []).map((slot) => SLOT_LABELS[slot - 1] ?? `항목 ${slot}`),
     uncertaintyLabels: (claim.evaluation?.uncertaintyCodes ?? []).map(reasonLabel),
     bucketEvidence: claim.evaluation ? {
       support: claim.evaluation.supportEvidenceIds.map((id) => evidenceById.get(id)).filter(Boolean),
@@ -167,11 +216,16 @@ export function buildReviewResultView(result: ReviewResult) {
     slots: result.judgmentSlots.slice().sort((a, b) => a.slotId - b.slotId).map(slotView),
     claims,
     summaryCounts,
-    evidence: result.evidence.map(evidenceView),
+    evidence,
     numericChecks,
     findings: result.findings.map((finding) => ({
       ...finding, kindLabel: FINDING_LABELS[finding.kind], slotLabel: SLOT_LABELS[finding.slotId - 1] ?? `항목 ${finding.slotId}`,
-      message: findingMessage(finding.kind, SLOT_LABELS[finding.slotId - 1] ?? `항목 ${finding.slotId}`, claimsByEvaluationId.get(finding.claimEvaluationId ?? "")?.proposition ?? null),
+      message: findingMessage(
+        finding.kind,
+        SLOT_LABELS[finding.slotId - 1] ?? `항목 ${finding.slotId}`,
+        claimsByEvaluationId.get(finding.claimEvaluationId ?? "")?.proposition ?? null,
+        claimsByEvaluationId.get(finding.claimEvaluationId ?? "")?.limitationLabel ?? null,
+      ),
       citations: finding.citations.map((citation) => ({ ...citation, evidence: evidenceById.get(citation.evidenceId) ?? null })),
     })),
     opposingSearch: result.opposingSearch ? {
@@ -181,10 +235,7 @@ export function buildReviewResultView(result: ReviewResult) {
         ? "반대 방향 근거도 별도로 확인했습니다."
         : "반대 방향 근거 확인이 제한되었습니다.",
     } : null,
-    providerCollections: Object.entries(result.providerCollections).map(([key, collection]) => ({
-      key, ...collection, statusLabel: PROVIDER_STATUS_LABELS[collection.status],
-      reasonLabel: collection.reasonCode ? reasonLabel(collection.reasonCode) : null,
-    })),
+    providerCollections,
     report: {
       ...result.report,
       slots: result.report.renderedSlots.map((slot) => ({

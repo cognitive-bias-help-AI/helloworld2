@@ -262,6 +262,35 @@ def _unit_sort_key(item: _ValidatedUnit) -> tuple:
     )
 
 
+def _suppress_composite_units(items: Iterable[_ValidatedUnit]) -> tuple[_ValidatedUnit, ...]:
+    """Suppress a parent span when atomic children already represent it."""
+
+    validated = tuple(items)
+    suppressed: set[int] = set()
+    for index, parent in enumerate(validated):
+        children = sorted(
+            (
+                child
+                for child_index, child in enumerate(validated)
+                if child_index != index
+                and child.segment.segment_id == parent.segment.segment_id
+                and child.unit.slot_id == parent.unit.slot_id
+                and child.unit.semantic_kind is parent.unit.semantic_kind
+                and parent.global_start <= child.global_start
+                and child.global_end <= parent.global_end
+                and (child.global_start, child.global_end)
+                != (parent.global_start, parent.global_end)
+            ),
+            key=lambda item: (item.global_start, item.global_end),
+        )
+        if len(children) >= 2 and all(
+            left.global_end <= right.global_start
+            for left, right in zip(children, children[1:], strict=False)
+        ):
+            suppressed.add(index)
+    return tuple(item for index, item in enumerate(validated) if index not in suppressed)
+
+
 def _claim_id(
     run_id: str,
     projection_version: str,
@@ -275,7 +304,7 @@ def _claim_id(
         "slot_id": item.unit.slot_id,
         "span_offset": [item.global_start, item.global_end],
         "user_text_span": item.unit.text_span,
-        "verifiable": True,
+        "verifiable": item.unit.semantic_kind is SemanticKind.EXTERNAL_ASSERTION,
     }
     encoded = json.dumps(
         body, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -430,7 +459,9 @@ def assemble_semantic_extraction(
             ambiguities=ambiguities,
         )
 
-    ordered_units = tuple(sorted(validated, key=_unit_sort_key))
+    ordered_units = tuple(
+        sorted(_suppress_composite_units(validated), key=_unit_sort_key)
+    )
     external_units = tuple(
         item for item in ordered_units if item.unit.semantic_kind in _EXTERNAL_KINDS
     )
@@ -485,7 +516,12 @@ def assemble_semantic_extraction(
             normalized_proposition=(
                 external_by_index[index].unit.normalized_proposition or ""
             ),
-            verifiable=True,
+            # Expectations remain visible as Claims but are not factual
+            # verification targets for downstream evidence planning.
+            verifiable=(
+                external_by_index[index].unit.semantic_kind
+                is SemanticKind.EXTERNAL_ASSERTION
+            ),
             origin=external_by_index[index].segment.origin,
             created_at=run_started_at,
         )

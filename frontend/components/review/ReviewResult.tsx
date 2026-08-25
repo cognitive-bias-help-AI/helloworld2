@@ -27,7 +27,7 @@ export function ReviewResult({ result }: { result: ReviewResultData }) {
     <section className="card" aria-labelledby="judgment-title">
       <h2 id="judgment-title">내 판단</h2>
       <div className="slot-list">{view.slots.map((slot) => <article className="slot-card" key={slot.slotId}>
-        <div className="slot-heading"><span>{slot.slotId}</span><h3>{slot.label}</h3></div>
+        <div className="slot-heading"><h3>{slot.label}</h3></div>
         <p className={`state-chip state-${slot.responseState}`}>{slot.responseStateLabel}</p>
         {slot.displayValues.length > 0 && <ul>{slot.displayValues.map((value, index) => <li key={`${slot.slotId}-${index}`}>{value}</li>)}</ul>}
         <p className="slot-status">상태: {slot.statusLabel}</p>
@@ -45,7 +45,8 @@ export function ReviewResult({ result }: { result: ReviewResultData }) {
         <details><summary>판단 근거 상세</summary>
           <dl className="detail-list"><div><dt>검증 대상</dt><dd>{claim.verifiable ? "예" : "아니요"}</dd></div><div><dt>입력 출처</dt><dd>{claim.origin}</dd></div><div><dt>Claim ID</dt><dd><code>{claim.claimId}</code></dd></div></dl>
           {claim.evaluation && <>
-            {claim.missingDimensions.length > 0 && <div className="detail-block"><strong>추가 확인이 필요한 항목</strong><ul>{claim.missingDimensions.map((slot) => <li key={slot}>항목 {slot}</li>)}</ul></div>}
+            {claim.missingDimensionLabels.length > 0 && <div className="detail-block"><strong>추가 확인이 필요한 정보</strong><ul>{claim.missingDimensionLabels.map((slot) => <li key={slot}>{slot}</li>)}</ul></div>}
+            {claim.limitationLabel && <div className="detail-block"><strong>검토 범위</strong><p>{claim.limitationLabel}</p></div>}
             {claim.uncertaintyLabels.length > 0 && <div className="detail-block"><strong>불확실성</strong><ul>{claim.uncertaintyLabels.map((label, index) => <li key={`${label}-${index}`}>{label} <code>{claim.evaluation!.uncertaintyCodes[index]}</code></li>)}</ul></div>}
             {claim.bucketEvidence && Object.entries(claim.bucketEvidence).map(([bucket, items]) => items.length > 0 && <div className="detail-block" key={bucket}><strong>{bucketLabels[bucket as keyof typeof bucketLabels]}</strong><ul>{items.map((item) => item && <li key={item.evidenceId}><a href={`#evidence-${item.evidenceId}`}>{item.publisher || sourceLabels[item.sourceType] || item.source}</a></li>)}</ul></div>)}
           </>}
@@ -66,8 +67,8 @@ export function ReviewResult({ result }: { result: ReviewResultData }) {
 
     {view.numericChecks.length > 0 && <section className="card" aria-labelledby="numeric-title"><h2 id="numeric-title">수치 확인</h2><div className="table-scroll"><table><thead><tr><th>지표</th><th>기간</th><th>주장 값</th><th>확인 값</th><th>결과</th></tr></thead><tbody>{view.numericChecks.map((check, index) => <tr key={`${check.claimId}-${index}`}><td>{check.metric}</td><td>{check.period || "-"}</td><td>{check.claimed}</td><td>{check.observed ?? "자료 없음"}{check.observed !== null && check.unit ? ` ${check.unit}` : ""}</td><td>{check.resultLabel}</td></tr>)}</tbody></table></div></section>}
 
-    {(view.claims.some((claim) => claim.missingDimensions.length || claim.uncertaintyLabels.length) || view.providerCollections.length > 0) && <section className="card" aria-labelledby="limits-title"><h2 id="limits-title">자료 범위와 불확실성</h2>
-      {view.claims.map((claim) => (claim.missingDimensions.length > 0 || claim.uncertaintyLabels.length > 0) && <article className="limit-item" key={claim.claimId}><strong>{claim.proposition}</strong>{claim.missingDimensions.length > 0 && <p>추가 확인 항목: {claim.missingDimensions.join(", ")}</p>}{claim.uncertaintyLabels.map((label, index) => <p key={`${label}-${index}`}>{label}</p>)}</article>)}
+    {(view.claims.some((claim) => claim.missingDimensions.length || claim.uncertaintyLabels.length || claim.limitationLabel) || view.providerCollections.length > 0) && <section className="card" aria-labelledby="limits-title"><h2 id="limits-title">자료 범위와 불확실성</h2>
+      {view.claims.map((claim) => (claim.missingDimensions.length > 0 || claim.uncertaintyLabels.length > 0 || claim.limitationLabel) && <article className="limit-item" key={claim.claimId}><strong>{claim.proposition}</strong>{claim.missingDimensionLabels.length > 0 && <p>추가 확인이 필요한 정보: {claim.missingDimensionLabels.join(", ")}</p>}{claim.limitationLabel && <p>{claim.limitationLabel}</p>}{claim.uncertaintyLabels.map((label, index) => <p key={`${label}-${index}`}>{label}</p>)}</article>)}
       {view.providerCollections.length > 0 && <details><summary>자료원별 수집 상태</summary><div className="provider-grid">{view.providerCollections.map((provider) => <article key={provider.key}><h3>{sourceLabels[provider.source] || provider.source}</h3><strong>{provider.statusLabel}</strong>{provider.reasonLabel && <p>{provider.reasonLabel}</p>}<p>요청 {provider.queriesRun}회 · 채택 {provider.itemsAdopted}건</p>{provider.reasonCode && <code>{provider.reasonCode}</code>}</article>)}</div></details>}
     </section>}
 

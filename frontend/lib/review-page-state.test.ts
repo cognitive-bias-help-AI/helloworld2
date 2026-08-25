@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyReviewResponse, beginReview, initialReviewPageState, questionResumeValue, reviewFormControls, reviewPageText, selectedCodeResumeValue } from "./review-page-state.ts";
+import { applyReviewResponse, beginReview, canAdvanceIntakeStep, INTAKE_STEP_COUNT, initialReviewPageState, moveIntakeStep, questionResumeValue, reviewFormControls, reviewPageText, selectedCodeResumeValue } from "./review-page-state.ts";
 
 const result = {
   stock: { code: "005930", name: "삼성전자", market: "KOSPI" },
@@ -82,4 +82,18 @@ test("page contract exposes the structured required controls and canonical optio
   assert.deepEqual(Object.keys(reviewFormControls.decisionAction), ["CONSIDER_ENTRY", "HOLD", "CONSIDER_EXIT", "WAIT"]);
   assert.deepEqual(Object.keys(reviewFormControls.holdingState), ["HOLDING", "NOT_HOLDING"]);
   assert.deepEqual(Object.keys(reviewFormControls.timeHorizon), ["SHORT", "MEDIUM", "LONG", "UNDECIDED"]);
+});
+
+test("survey wizard has four bounded local steps and validates only local requirements", () => {
+  assert.equal(INTAKE_STEP_COUNT, 4);
+  assert.equal(moveIntakeStep(0, -1), 0);
+  assert.equal(moveIntakeStep(3, 1), 3);
+  assert.equal(moveIntakeStep(1, 1), 2);
+  const base = { mode: "SURVEY_FIRST" as const, stockInput: "", primaryReasons: "", primaryReasonsResponseState: "answered" as const };
+  assert.equal(canAdvanceIntakeStep(0, base), false);
+  assert.equal(canAdvanceIntakeStep(0, { ...base, stockInput: "005930" }), true);
+  assert.equal(canAdvanceIntakeStep(1, { ...base, stockInput: "005930" }), false);
+  assert.equal(canAdvanceIntakeStep(1, { ...base, stockInput: "005930", primaryReasons: "실적" }), true);
+  assert.equal(canAdvanceIntakeStep(1, { ...base, stockInput: "005930", primaryReasonsResponseState: "unknown" }), true);
+  assert.equal(canAdvanceIntakeStep(0, { ...base, mode: "CHAT_FIRST" }), true);
 });

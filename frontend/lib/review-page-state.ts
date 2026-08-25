@@ -1,11 +1,33 @@
 import type { HitlPayload, ReviewResponse, ReviewResult } from "./types.ts";
-import type { DecisionAction, HoldingState, TimeHorizon } from "./intake.ts";
+import type { DecisionAction, HoldingState, IntakeMode, TimeHorizon } from "./intake.ts";
 import type { ResponseState } from "./intake.ts";
 
 export const reviewPageText = {
   title: "투자 판단 점검",
   loading: "판단 근거를 점검하고 있습니다...",
 } as const;
+
+export const INTAKE_STEP_COUNT = 4;
+
+export type IntakeStepValidation = {
+  mode: IntakeMode;
+  stockInput: string;
+  primaryReasons: string;
+  primaryReasonsResponseState: ResponseState;
+};
+
+export function moveIntakeStep(currentStep: number, direction: -1 | 1): number {
+  return Math.max(0, Math.min(INTAKE_STEP_COUNT - 1, currentStep + direction));
+}
+
+export function canAdvanceIntakeStep(currentStep: number, validation: IntakeStepValidation): boolean {
+  if (validation.mode === "CHAT_FIRST") return true;
+  if (currentStep === 0) return Boolean(validation.stockInput.trim());
+  if (currentStep === 1 && validation.primaryReasonsResponseState === "answered") {
+    return Boolean(validation.primaryReasons.trim());
+  }
+  return true;
+}
 
 export const reviewFormControls = {
   stockInput: { required: true },

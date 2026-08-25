@@ -105,11 +105,39 @@ test("all eight slots render and non-answer states are meaningful rather than bl
   assert.equal(view.slots[7].responseStateLabel, "답변하지 않음");
 });
 
+test("slot display values defensively remove exact duplicates only", () => {
+  const result = resultFixture();
+  result.judgmentSlots[6].values = ["A", "A", "B"];
+  assert.deepEqual(buildReviewResultView(result).slots[6].displayValues, ["A", "B"]);
+});
+
 test("non-verifiable claim remains visible without being called unsupported", () => {
   const claim = buildReviewResultView(resultFixture()).claims.at(-1)!;
   assert.equal(claim.proposition, "장기적으로 기대합니다");
   assert.equal(claim.verdictLabel, "외부 자료로 직접 검증하는 주장으로 분류되지 않았습니다.");
   assert.notEqual(claim.verdictLabel, "뒷받침 근거를 확인하지 못함");
+  assert.equal(claim.limitationLabel, "미래에 대한 기대이므로 직접 사실 확인 대상이 아닙니다. 현재 근거의 범위만 점검합니다.");
+});
+
+test("corroborative evidence is shown as source-limited without changing the verdict", () => {
+  const result = resultFixture();
+  result.evidence[0].roles = ["CORROBORATIVE"];
+  const claim = buildReviewResultView(result).claims[0];
+  assert.equal(claim.evaluation?.verdict, "support");
+  assert.equal(claim.limitationLabel, "관련 자료는 확인되었으나 직접 검증 범위가 제한됩니다.");
+});
+
+test("no evidence and provider failure have different user-facing reasons", () => {
+  const noResult = resultFixture();
+  noResult.evidence = [];
+  assert.equal(buildReviewResultView(noResult).claims[0].limitationLabel, "현재 검색 조건에서 이 판단을 확인할 자료를 충분히 찾지 못했습니다.");
+
+  const failed = resultFixture();
+  failed.evidence = [];
+  failed.providerCollections = {
+    dart: { source: "dart", status: "MISSING", reasonCode: "auth_failed", itemsFetched: 0, itemsAdopted: 0, itemsDeduped: 0, queriesRun: 1 },
+  };
+  assert.equal(buildReviewResultView(failed).claims[0].limitationLabel, "필요한 자료원에서 데이터를 불러오지 못해 검토가 제한되었습니다.");
 });
 
 test("evidence keeps canonical roles and all four stances with only safe source links", () => {
