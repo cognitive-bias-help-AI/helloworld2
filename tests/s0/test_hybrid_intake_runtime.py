@@ -251,6 +251,31 @@ async def test_security_projection은_target_structured_free_text_순으로_결�
     assert "010-1234-5678" not in json.dumps(body, ensure_ascii=False)
 
 
+@pytest.mark.parametrize("rrn", ["900101-1234567", "9001011234567"])
+async def test_n0는_주민등록번호를_model_호출_전에_RRN으로_마스킹한다(rrn):
+    runtime_deps = deps()
+    intake = _intake(free_text=(FreeTextInput(text=f"주민번호는 {rrn} 입니다", source=SourceTrace.CHAT_EXPLICIT),))
+
+    n0_patch = await make_nodes(runtime_deps)["n0"](
+        initial_state(), Runtime(context=ReviewRequestContext(intake=intake))
+    )
+    body = await runtime_deps.review_store.get_input(n0_patch["input_id"])
+    assert rrn not in json.dumps(body, ensure_ascii=False)
+    assert "[RRN]" in body["masked_security_input"]
+
+    await make_nodes(runtime_deps)["n1"](initial_state() | {"input_id": n0_patch["input_id"]})
+    _, view = runtime_deps.model_gateway.calls[-1]
+    assert rrn not in view.masked_input
+    assert "[RRN]" in view.masked_input
+
+
+def test_sanitize_user_text는_금융_숫자를_주민등록번호로_오인하지_않는다():
+    from app.domain.text_safety import sanitize_user_text
+
+    value = "삼성전자 005930 2025년 11011 영업이익 100000"
+    assert sanitize_user_text(value) == value
+
+
 @pytest.mark.asyncio
 async def test_structured_input_order와_중복_text는_security_projection에서_보존된다():
     first = _intake(

@@ -37,20 +37,35 @@ const FINDING_LABELS = {
 } as const;
 
 const REASON_LABELS: Record<string, string> = {
-  coverage_truncated: "근거 범위가 일부 제한됨",
-  no_result: "조건에 맞는 자료를 찾지 못함",
-  stale_data: "자료의 최신성이 제한됨",
-  source_unavailable: "해당 자료원을 사용할 수 없음",
-  evidence_insufficient: "판단에 필요한 근거가 충분하지 않음",
+  coverage_truncated: "일부 근거만 검토되어 판단 범위가 제한되었습니다.",
+  no_result: "조건에 맞는 자료를 찾지 못했습니다.",
+  stale_data: "일부 자료의 최신성이 제한될 수 있습니다.",
+  source_unavailable: "일부 자료원을 사용할 수 없어 검토 범위가 제한되었습니다.",
+  evidence_insufficient: "현재 확보된 자료만으로 충분히 확인하기 어렵습니다.",
 };
 
 const BANNER_LABELS: Record<string, string> = {
-  coverage_truncated: "수집 가능한 근거 범위가 일부 제한되었습니다.",
-  no_result: "일부 항목에서 조건에 맞는 자료를 찾지 못했습니다.",
+  coverage_truncated: "일부 근거만 검토되어 판단 범위가 제한되었습니다.",
+  no_result: "조건에 맞는 자료를 찾지 못했습니다.",
   stale_data: "일부 자료의 최신성이 제한될 수 있습니다.",
   source_unavailable: "일부 자료원을 사용할 수 없어 검토 범위가 제한되었습니다.",
-  evidence_insufficient: "현재 자료만으로 충분히 확인하기 어려운 항목이 있습니다.",
+  evidence_insufficient: "현재 확보된 자료만으로 충분히 확인하기 어렵습니다.",
 };
+
+const VERDICT_EXPLANATIONS: Record<ClaimVerdict, string> = {
+  support: "현재 확보한 자료가 이 판단을 뒷받침합니다.",
+  partial_support: "일부 근거는 확인되지만 모든 내용을 뒷받침하지는 않습니다.",
+  unsupported: "현재 확보한 자료만으로는 이 판단을 충분히 확인하기 어렵습니다.",
+  contradicted: "현재 확인된 근거와 이 판단 사이에 차이가 있습니다.",
+  unverifiable: "현재 확보한 자료만으로는 이 판단을 충분히 확인하기 어렵습니다.",
+};
+
+const SUMMARY_BUCKETS = [
+  ["confirmed", "확인됨", ["support"]],
+  ["partial", "일부 확인", ["partial_support"]],
+  ["difficult", "확인 어려움", ["unsupported", "unverifiable"]],
+  ["needs_review", "다시 확인", ["contradicted"]],
+] as const;
 
 const PROVIDER_STATUS_LABELS = {
   OK: "자료 수집 완료", PARTIAL: "일부 자료만 수집됨", MISSING: "자료를 수집하지 못함",
@@ -73,6 +88,25 @@ export function safeHttpUrl(value: string | null): string | null {
 
 function reasonLabel(code: string): string {
   return REASON_LABELS[code] ?? "추가 확인이 필요한 제한 사항";
+}
+
+function findingMessage(
+  kind: "mismatch" | "missing" | "unverified" | "conflict",
+  slotLabel: string,
+  proposition: string | null,
+): string {
+  if (kind === "unverified") {
+    return proposition
+      ? `${proposition}\n현재 확보한 자료만으로는 이 판단 근거를 충분히 확인하기 어렵습니다.`
+      : `${slotLabel}에 필요한 자료를 충분히 확인하지 못했습니다.`;
+  }
+  if (kind === "mismatch") {
+    return proposition
+      ? `${proposition}\n사용자 판단과 확인된 근거 사이에 차이가 있습니다.`
+      : `${slotLabel}에서 입력한 판단과 확인된 근거 사이에 차이가 있습니다.`;
+  }
+  if (kind === "missing") return `${slotLabel}에 필요한 정보가 부족해 충분히 점검하지 못했습니다.`;
+  return `${slotLabel}에 서로 다른 정보가 있어 추가 확인이 필요합니다.`;
 }
 
 function slotView(slot: JudgmentSlotView) {
@@ -103,6 +137,7 @@ export function buildReviewResultView(result: ReviewResult) {
       ? VERDICT_LABELS[claim.evaluation.verdict]
       : "외부 자료로 직접 검증하는 주장으로 분류되지 않았습니다.",
     verdictSymbol: claim.evaluation ? VERDICT_SYMBOLS[claim.evaluation.verdict] : "○",
+    explanation: claim.evaluation ? VERDICT_EXPLANATIONS[claim.evaluation.verdict] : "외부 자료로 직접 검증하는 주장으로 분류되지 않았습니다.",
     missingDimensions: claim.evaluation?.missingDimensions ?? [],
     uncertaintyLabels: (claim.evaluation?.uncertaintyCodes ?? []).map(reasonLabel),
     bucketEvidence: claim.evaluation ? {
@@ -112,6 +147,12 @@ export function buildReviewResultView(result: ReviewResult) {
       unknown: claim.evaluation.unknownEvidenceIds.map((id) => evidenceById.get(id)).filter(Boolean),
     } : null,
   }));
+  const claimsByEvaluationId = new Map(claims.filter((claim) => claim.evaluation).map((claim) => [claim.evaluation!.claimEvaluationId, claim]));
+  const summaryCounts = SUMMARY_BUCKETS.map(([key, label, verdicts]) => ({
+    key,
+    label,
+    count: claims.filter((claim) => claim.evaluation && verdicts.includes(claim.evaluation.verdict as never)).length,
+  })).filter((item) => item.count > 0);
   const numericChecks = claims.flatMap((claim) => (claim.evaluation?.numericChecks ?? []).map((check) => ({
     ...check, claimId: claim.claimId, claimProposition: claim.proposition, resultLabel: NUMERIC_RESULT_LABELS[check.result],
   })));
@@ -125,14 +166,17 @@ export function buildReviewResultView(result: ReviewResult) {
     banners: result.report.banners.map((code) => ({ code, label: BANNER_LABELS[code] ?? reasonLabel(code) })),
     slots: result.judgmentSlots.slice().sort((a, b) => a.slotId - b.slotId).map(slotView),
     claims,
+    summaryCounts,
     evidence: result.evidence.map(evidenceView),
     numericChecks,
     findings: result.findings.map((finding) => ({
       ...finding, kindLabel: FINDING_LABELS[finding.kind], slotLabel: SLOT_LABELS[finding.slotId - 1] ?? `항목 ${finding.slotId}`,
+      message: findingMessage(finding.kind, SLOT_LABELS[finding.slotId - 1] ?? `항목 ${finding.slotId}`, claimsByEvaluationId.get(finding.claimEvaluationId ?? "")?.proposition ?? null),
       citations: finding.citations.map((citation) => ({ ...citation, evidence: evidenceById.get(citation.evidenceId) ?? null })),
     })),
     opposingSearch: result.opposingSearch ? {
       ...result.opposingSearch,
+      reasonLabel: result.opposingSearch.reason ? reasonLabel(result.opposingSearch.reason) : null,
       statusLabel: result.opposingSearch.status === "verified"
         ? "반대 방향 근거도 별도로 확인했습니다."
         : "반대 방향 근거 확인이 제한되었습니다.",
@@ -145,6 +189,7 @@ export function buildReviewResultView(result: ReviewResult) {
       ...result.report,
       slots: result.report.renderedSlots.map((slot) => ({
         ...slot,
+        label: SLOT_LABELS[slot.slotNo - 1] ?? `항목 ${slot.slotNo}`,
         citations: slot.citations.map((citation) => citations.get(citation.evidenceId) ?? {
           ...citation, sourceUrl: null, publisher: null, safeUrl: null, evidence: null,
         }),

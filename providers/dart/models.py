@@ -20,8 +20,10 @@ class DartFinancialRecord:
     fs_div: str
     current_amount: int | None = None
     prior_amount: int | None = None
+    prior_period_amount: int | None = None
     current_cumulative_amount: int | None = None
     prior_comparable_amount: int | None = None
+    comparison_basis: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

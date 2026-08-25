@@ -20,7 +20,8 @@ export function ReviewResult({ result }: { result: ReviewResultData }) {
       {view.stock.market && <p className="market-label">{view.stock.market}</p>}
       <p>입력한 판단을 자료와 대조해 확인된 부분과 다시 살펴볼 부분을 정리했습니다.</p>
       {view.degraded && <p className="degraded-note">일부 자료 수집이 제한된 결과입니다.</p>}
-      {view.banners.length > 0 && <div className="banner-list" aria-label="검토 범위 안내">{view.banners.map((banner) => <div className="result-banner" key={banner.code}><strong>검토 안내</strong><span>{banner.label}</span><code>{banner.code}</code></div>)}</div>}
+      {view.summaryCounts.length > 0 && <div className="summary-counts" aria-label="판단 점검 요약">{view.summaryCounts.map((item) => <div key={item.key}><strong>{item.count}</strong><span>{item.label}</span></div>)}</div>}
+      {view.banners.length > 0 && <div className="banner-list" aria-label="검토 범위 안내">{view.banners.map((banner) => <div className="result-banner" key={banner.code}><strong>검토 안내</strong><span>{banner.label}</span></div>)}</div>}
     </section>
 
     <section className="card" aria-labelledby="judgment-title">
@@ -35,10 +36,11 @@ export function ReviewResult({ result }: { result: ReviewResultData }) {
     </section>
 
     <section className="card" aria-labelledby="claims-title">
-      <h2 id="claims-title">주장 점검</h2>
+      <h2 id="claims-title">핵심 점검 결과</h2>
       {view.claims.length ? view.claims.map((claim) => <article className="claim-card" key={claim.claimId}>
         <div className={`verdict verdict-${claim.evaluation?.verdict ?? "context"}`}><span aria-hidden="true">{claim.verdictSymbol}</span><strong>{claim.verdictLabel}</strong></div>
         <p className="claim-proposition">{claim.proposition}</p>
+        <p className="claim-explanation">{claim.explanation}</p>
         <p className="claim-slot">관련 항목: {claim.slotLabel}</p>
         <details><summary>판단 근거 상세</summary>
           <dl className="detail-list"><div><dt>검증 대상</dt><dd>{claim.verifiable ? "예" : "아니요"}</dd></div><div><dt>입력 출처</dt><dd>{claim.origin}</dd></div><div><dt>Claim ID</dt><dd><code>{claim.claimId}</code></dd></div></dl>
@@ -65,18 +67,19 @@ export function ReviewResult({ result }: { result: ReviewResultData }) {
     {view.numericChecks.length > 0 && <section className="card" aria-labelledby="numeric-title"><h2 id="numeric-title">수치 확인</h2><div className="table-scroll"><table><thead><tr><th>지표</th><th>기간</th><th>주장 값</th><th>확인 값</th><th>결과</th></tr></thead><tbody>{view.numericChecks.map((check, index) => <tr key={`${check.claimId}-${index}`}><td>{check.metric}</td><td>{check.period || "-"}</td><td>{check.claimed}</td><td>{check.observed ?? "자료 없음"}{check.observed !== null && check.unit ? ` ${check.unit}` : ""}</td><td>{check.resultLabel}</td></tr>)}</tbody></table></div></section>}
 
     {(view.claims.some((claim) => claim.missingDimensions.length || claim.uncertaintyLabels.length) || view.providerCollections.length > 0) && <section className="card" aria-labelledby="limits-title"><h2 id="limits-title">자료 범위와 불확실성</h2>
-      {view.claims.map((claim) => (claim.missingDimensions.length > 0 || claim.uncertaintyLabels.length > 0) && <article className="limit-item" key={claim.claimId}><strong>{claim.proposition}</strong>{claim.missingDimensions.length > 0 && <p>추가 확인 항목: {claim.missingDimensions.join(", ")}</p>}{claim.uncertaintyLabels.map((label, index) => <p key={`${label}-${index}`}>{label} <code>{claim.evaluation?.uncertaintyCodes[index]}</code></p>)}</article>)}
+      {view.claims.map((claim) => (claim.missingDimensions.length > 0 || claim.uncertaintyLabels.length > 0) && <article className="limit-item" key={claim.claimId}><strong>{claim.proposition}</strong>{claim.missingDimensions.length > 0 && <p>추가 확인 항목: {claim.missingDimensions.join(", ")}</p>}{claim.uncertaintyLabels.map((label, index) => <p key={`${label}-${index}`}>{label}</p>)}</article>)}
       {view.providerCollections.length > 0 && <details><summary>자료원별 수집 상태</summary><div className="provider-grid">{view.providerCollections.map((provider) => <article key={provider.key}><h3>{sourceLabels[provider.source] || provider.source}</h3><strong>{provider.statusLabel}</strong>{provider.reasonLabel && <p>{provider.reasonLabel}</p>}<p>요청 {provider.queriesRun}회 · 채택 {provider.itemsAdopted}건</p>{provider.reasonCode && <code>{provider.reasonCode}</code>}</article>)}</div></details>}
     </section>}
 
-    {view.findings.length > 0 && <section className="card" aria-labelledby="findings-title"><h2 id="findings-title">다시 확인할 지점</h2>{view.findings.map((finding) => <article className="finding-card" key={finding.findingId}><strong>{finding.kindLabel}</strong><p>{finding.slotLabel}</p>{finding.citations.length > 0 && <ul>{finding.citations.map((citation, index) => <li key={`${citation.evidenceId}-${index}`}><a href={`#evidence-${citation.evidenceId}`}>{citation.span}</a></li>)}</ul>}</article>)}</section>}
+    {view.findings.length > 0 && <section className="card" aria-labelledby="findings-title"><h2 id="findings-title">다시 확인할 지점</h2>{view.findings.map((finding) => <article className="finding-card" key={finding.findingId}><strong>{finding.kindLabel}</strong><p>{finding.message}</p>{finding.citations.length > 0 && <ul>{finding.citations.map((citation, index) => <li key={`${citation.evidenceId}-${index}`}><a href={`#evidence-${citation.evidenceId}`}>{citation.span}</a></li>)}</ul>}</article>)}</section>}
 
-    {view.opposingSearch && <section className="card opposing-search" aria-labelledby="opposing-title"><h2 id="opposing-title">반대 방향 근거 확인</h2><p><strong>{view.opposingSearch.statusLabel}</strong></p>{view.opposingSearch.count !== null && <p>확인된 항목: {view.opposingSearch.count}건</p>}{view.opposingSearch.queries && view.opposingSearch.queries.length > 0 && <details><summary>검색 범위 보기</summary><ul>{view.opposingSearch.queries.map((query) => <li key={query}>{query}</li>)}</ul></details>}{view.opposingSearch.reason && <p className="muted">제한 사유: {view.opposingSearch.reason}</p>}</section>}
+    {view.opposingSearch && <section className="card opposing-search" aria-labelledby="opposing-title"><h2 id="opposing-title">반대 방향 근거 확인</h2><p><strong>{view.opposingSearch.statusLabel}</strong></p>{view.opposingSearch.count !== null && <p>확인된 항목: {view.opposingSearch.count}건</p>}{view.opposingSearch.queries && view.opposingSearch.queries.length > 0 && <details><summary>검색 범위 보기</summary><ul>{view.opposingSearch.queries.map((query) => <li key={query}>{query}</li>)}</ul></details>}{view.opposingSearch.reasonLabel && <p className="muted">{view.opposingSearch.reasonLabel}</p>}</section>}
 
     <section className="card final-report" aria-labelledby="report-title"><h2 id="report-title">최종 검토 보고서</h2>
-      {view.report.slots.length > 0 ? view.report.slots.map((slot) => <article className="report-slot" key={slot.slotNo}><h3>{slot.slotNo}. 검토 항목</h3><p>{slot.text}</p>{slot.citations.length > 0 && <div className="report-citations"><strong>연결된 근거</strong><ul>{slot.citations.map((citation, index) => <li key={`${citation.evidenceId}-${index}`}><a href={`#evidence-${citation.evidenceId}`}>{citation.publisher || citation.evidence?.publisher || citation.span}</a>{citation.safeUrl && <> · <a href={citation.safeUrl} target="_blank" rel="noopener noreferrer">원문</a></>}</li>)}</ul></div>}</article>) : <p className="summary">{view.finalSummaryFallback}</p>}
+      {view.report.slots.length > 0 ? view.report.slots.map((slot) => <article className="report-slot" key={slot.slotNo}><h3>{slot.slotNo}. {slot.label}</h3><p>{slot.text}</p>{slot.citations.length > 0 && <div className="report-citations"><strong>연결된 근거</strong><ul>{slot.citations.map((citation, index) => <li key={`${citation.evidenceId}-${index}`}><a href={`#evidence-${citation.evidenceId}`}>{citation.publisher || citation.evidence?.publisher || citation.span}</a>{citation.safeUrl && <> · <a href={citation.safeUrl} target="_blank" rel="noopener noreferrer">원문</a></>}</li>)}</ul></div>}</article>) : <p className="summary">{view.finalSummaryFallback}</p>}
       <p className="report-date">생성 시각: <time dateTime={view.report.createdAt}>{dateLabel(view.report.createdAt)}</time></p>
       {view.theoryNotes.length > 0 && <details className="theory-notes"><summary>이론 설명 보기</summary>{view.theoryNotes.map((note) => <article key={note.theory_id}><h3>{note.name}</h3><p>{note.definition}</p><p>{note.observable_pattern}</p><p className="muted">{note.non_diagnostic_warning}</p></article>)}</details>}
     </section>
+    <details className="card technical-details"><summary>기술 상세</summary><p>정규화된 제한 코드: {view.banners.map((banner) => banner.code).join(", ") || "없음"}</p><p>불확실성 코드: {view.claims.flatMap((claim) => claim.evaluation?.uncertaintyCodes ?? []).join(", ") || "없음"}</p><p>자료원 상태 코드: {view.providerCollections.map((provider) => provider.reasonCode).filter(Boolean).join(", ") || "없음"}</p></details>
   </section>;
 }

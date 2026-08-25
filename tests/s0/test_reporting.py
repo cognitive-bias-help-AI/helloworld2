@@ -11,6 +11,7 @@ from app.orchestration.reporting import (
 )
 from app.orchestration.validators.citations import CitationContractViolation, validate_citations
 from app.schemas.frozen import CitationRef, Evidence, ReasonCode
+from app.ui_projection import _report
 
 NOW = datetime(2026, 8, 14, tzinfo=UTC)
 EID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
@@ -47,6 +48,72 @@ def test_report_artifact_converts_draft_and_derives_citation_index():
     assert artifact.rendered_slots[0].__class__.__name__ == "RenderedSlotArtifact"
     assert [item.evidence_id for item in artifact.citations] == [EID]
     assert ReportArtifact.model_validate(artifact.model_dump(mode="json")) == artifact
+
+
+def test_report_artifact_deduplicates_exact_citations_within_one_slot():
+    draft = RenderDraft(
+        slots=[
+            RenderedSlotDraft(
+                slot_no=1,
+                text="본문",
+                citations=[citation(), citation(), CitationRef(evidence_id=EID, span="다른 근거")],
+            )
+        ]
+    )
+    views = {
+        EID: RenderCitationView(evidence_id=EID, span="문장", source_url="https://example.com", publisher="p")
+    }
+    artifact = build_report_artifact(
+        draft, banners=[], theory_notes=[], citation_views=views, created_at=NOW
+    )
+    assert artifact.rendered_slots[0].citations == [citation(), CitationRef(evidence_id=EID, span="다른 근거")]
+
+
+def test_report_artifact_keeps_same_citation_in_different_slots():
+    draft = RenderDraft(
+        slots=[
+            RenderedSlotDraft(slot_no=1, text="A", citations=[citation(), citation()]),
+            RenderedSlotDraft(slot_no=2, text="B", citations=[citation()]),
+        ]
+    )
+    views = {
+        EID: RenderCitationView(evidence_id=EID, span="문장", source_url="https://example.com", publisher="p")
+    }
+    artifact = build_report_artifact(
+        draft, banners=[], theory_notes=[], citation_views=views, created_at=NOW
+    )
+    assert artifact.rendered_slots[0].citations == [citation()]
+    assert artifact.rendered_slots[1].citations == [citation()]
+
+
+def test_report_artifact_keeps_top_level_citation_index_unique():
+    draft = RenderDraft(
+        slots=[
+            RenderedSlotDraft(slot_no=1, text="A", citations=[citation()]),
+            RenderedSlotDraft(slot_no=2, text="B", citations=[citation()]),
+        ]
+    )
+    views = {
+        EID: RenderCitationView(evidence_id=EID, span="문장", source_url="https://example.com", publisher="p")
+    }
+    artifact = build_report_artifact(
+        draft, banners=[], theory_notes=[], citation_views=views, created_at=NOW
+    )
+    assert len(artifact.citations) == 1
+
+
+def test_ui_projection_preserves_the_deduplicated_canonical_slot():
+    draft = RenderDraft(
+        slots=[RenderedSlotDraft(slot_no=1, text="A", citations=[citation(), citation()])]
+    )
+    views = {
+        EID: RenderCitationView(evidence_id=EID, span="문장", source_url="https://example.com", publisher="p")
+    }
+    artifact = build_report_artifact(
+        draft, banners=[], theory_notes=[], citation_views=views, created_at=NOW
+    )
+    projected = _report(artifact)
+    assert projected["renderedSlots"][0]["citations"] == [{"evidenceId": EID, "span": "문장"}]
 
 
 def test_i7_exact_containment_and_no_normalization():

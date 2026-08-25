@@ -40,11 +40,14 @@ def parse_financial_statement(
     report_code: str,
     fs_div: str,
     account_names: Iterable[str],
+    comparison_basis: str | None = None,
 ) -> list[DartFinancialRecord]:
     require_success(raw)
     selected = frozenset(account_names)
     if not selected:
         raise ValueError("account_names must not be empty")
+    if comparison_basis not in {None, "INTERIM_PERIOD", "INTERIM_CUMULATIVE"}:
+        raise ValueError("unsupported financial comparison_basis")
     selected_concepts = tuple(
         concept
         for concept, spec in ACCOUNT_CONCEPTS.items()
@@ -101,8 +104,10 @@ def parse_financial_statement(
                 fs_div=fs_div,
                 current_amount=normalize_dart_amount(row.get("thstrm_amount")),
                 prior_amount=normalize_dart_amount(row.get("frmtrm_amount")),
+                prior_period_amount=normalize_dart_amount(row.get("frmtrm_q_amount")),
                 current_cumulative_amount=normalize_dart_amount(row.get("thstrm_add_amount")),
                 prior_comparable_amount=normalize_dart_amount(row.get("frmtrm_add_amount")),
+                comparison_basis=comparison_basis,
             )
         )
     return records

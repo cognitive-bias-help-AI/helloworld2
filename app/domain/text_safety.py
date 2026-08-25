@@ -6,8 +6,9 @@ import re
 
 
 def sanitize_user_text(value: str) -> str:
-    """Apply the existing n0 whitespace, email, and phone masking policy."""
+    """Apply deterministic high-confidence masking before model invocation."""
 
     value = " ".join(value.split())
+    value = re.sub(r"(?<!\d)\d{6}-?[1-8]\d{6}(?!\d)", "[RRN]", value)
     value = re.sub(r"[\w.+-]+@[\w.-]+", "[EMAIL]", value)
     return re.sub(r"\b01[016789]-?\d{3,4}-?\d{4}\b", "[PHONE]", value)

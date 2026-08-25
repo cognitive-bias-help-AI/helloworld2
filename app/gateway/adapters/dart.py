@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import ClassVar, Literal
 
@@ -48,26 +49,73 @@ _REASON_CODES = {
     DartErrorKind.INVALID_REQUEST: ReasonCode.SCHEMA_INVALID,
 }
 
+ANNUAL_BASIS = "ANNUAL"
+INTERIM_PERIOD_BASIS = "INTERIM_PERIOD"
+INTERIM_CUMULATIVE_BASIS = "INTERIM_CUMULATIVE"
+NOT_COMPARABLE_BASIS = "NOT_COMPARABLE"
+
+
+@dataclass(frozen=True)
+class FinancialComparison:
+    current_value: int | None
+    prior_value: int | None
+    basis: str
+
+    @property
+    def available(self) -> bool:
+        return self.current_value is not None and self.prior_value is not None
+
+    @property
+    def direction(self) -> str | None:
+        if not self.available:
+            return None
+        if self.current_value > self.prior_value:
+            return "increase"
+        if self.current_value < self.prior_value:
+            return "decrease"
+        return "unchanged"
+
+
+def resolve_financial_comparison(record: DartFinancialRecord) -> FinancialComparison:
+    """Select only an explicitly compatible OpenDART period basis."""
+    current_amount = record.current_amount if record.current_amount is not None else record.amount
+    if record.report_code == "11011":
+        return FinancialComparison(current_amount, record.prior_amount, ANNUAL_BASIS)
+    if record.statement_code not in {"IS", "CIS"}:
+        return FinancialComparison(None, None, NOT_COMPARABLE_BASIS)
+    if record.comparison_basis == INTERIM_PERIOD_BASIS:
+        return FinancialComparison(current_amount, record.prior_period_amount, INTERIM_PERIOD_BASIS)
+    if record.comparison_basis == INTERIM_CUMULATIVE_BASIS:
+        return FinancialComparison(
+            record.current_cumulative_amount,
+            record.prior_comparable_amount,
+            INTERIM_CUMULATIVE_BASIS,
+        )
+    return FinancialComparison(None, None, NOT_COMPARABLE_BASIS)
+
 
 def record_to_evidence_draft(record: DartFinancialRecord) -> EvidenceDraft:
-    current = record.current_amount if record.current_amount is not None else record.amount
-    prior = record.prior_amount
-    amount = "값 없음" if current is None else f"{current:,}"
-    prior_text = "값 없음" if prior is None else f"{prior:,}"
-    if current is None or prior is None:
-        change_direction = None
-    elif current > prior:
-        change_direction = "increase"
-    elif current < prior:
-        change_direction = "decrease"
-    else:
-        change_direction = "unchanged"
+    comparison = resolve_financial_comparison(record)
+    current_period = record.current_amount if record.current_amount is not None else record.amount
+    prior_period = record.prior_period_amount
+    current_cumulative = record.current_cumulative_amount
+    prior_cumulative = record.prior_comparable_amount
+    amount = "값 없음" if comparison.current_value is None else f"{comparison.current_value:,}"
+    prior_text = "값 없음" if comparison.prior_value is None else f"{comparison.prior_value:,}"
     unit = f" {record.currency}" if record.currency else ""
-    raw_span = (
+    prefix = (
         f"{record.business_year} {_REPORT_NAMES[record.report_code]} "
-        f"{_FS_NAMES[record.fs_div]} {record.statement_name} "
-        f"{record.account_name}: 당기 {amount}{unit} / 전기 {prior_text}{unit}"
+        f"{_FS_NAMES[record.fs_div]} {record.statement_name} {record.account_name}: "
     )
+    if comparison.basis == ANNUAL_BASIS:
+        raw_span = f"{prefix}당기 {amount}{unit} / 전기 {prior_text}{unit}"
+    elif comparison.basis == INTERIM_PERIOD_BASIS:
+        raw_span = f"{prefix}당기 3개월 {amount}{unit} / 전기 동기 3개월 {prior_text}{unit}"
+    elif comparison.basis == INTERIM_CUMULATIVE_BASIS:
+        raw_span = f"{prefix}당기 누적 {amount}{unit} / 전기 동기 누적 {prior_text}{unit}"
+    else:
+        current_text = "값 없음" if current_period is None else f"{current_period:,}"
+        raw_span = f"{prefix}당기 3개월 {current_text}{unit} / 비교 기준 미확정"
     return EvidenceDraft(
         source_type="dart",
         source_ref=(
@@ -87,12 +135,16 @@ def record_to_evidence_draft(record: DartFinancialRecord) -> EvidenceDraft:
             "account_id": record.account_id,
             "account_name": record.account_name,
             "value": record.amount,
-            "current_value": current,
-            "prior_value": prior,
-            "current_cumulative_value": record.current_cumulative_amount,
-            "prior_comparable_value": record.prior_comparable_amount,
-            "comparison_available": current is not None and prior is not None,
-            "change_direction": change_direction,
+            "current_value": comparison.current_value,
+            "prior_value": comparison.prior_value,
+            "current_period_value": current_period,
+            "prior_period_value": prior_period,
+            "current_cumulative_value": current_cumulative,
+            "prior_cumulative_value": prior_cumulative,
+            "prior_comparable_value": prior_cumulative,
+            "comparison_basis": comparison.basis,
+            "comparison_available": comparison.available,
+            "change_direction": comparison.direction,
             "unit": record.currency,
             "business_year": record.business_year,
             "report_code": record.report_code,
@@ -207,13 +259,17 @@ class DartAdapter:
             raise ValueError(f"unsupported DART endpoint: {q.endpoint}")
         params = q.params
         required = {"stock_code", "bsns_year", "reprt_code", "fs_div", "account_names"}
-        if set(params) != required:
+        allowed = required | {"comparison_basis"}
+        if not required <= set(params) or not set(params) <= allowed:
             raise ValueError("financial_statement params do not match v1 contract")
         stock_code = params["stock_code"]
         year = params["bsns_year"]
         report_code = params["reprt_code"]
         fs_div = params["fs_div"]
         account_names = params["account_names"]
+        comparison_basis = params.get("comparison_basis")
+        if comparison_basis not in {None, INTERIM_PERIOD_BASIS, INTERIM_CUMULATIVE_BASIS}:
+            raise ValueError("unsupported financial comparison_basis")
         if not isinstance(stock_code, str):
             raise ValueError("stock_code must be a string")
         if not isinstance(year, str) or len(year) != 4 or not year.isdigit():
@@ -439,6 +495,7 @@ class DartAdapter:
             report_code=request.params["reprt_code"],
             fs_div=request.params["fs_div"],
             account_names=q.params["account_names"],
+            comparison_basis=q.params.get("comparison_basis"),
         )
         return [record_to_evidence_draft(record) for record in records]
 

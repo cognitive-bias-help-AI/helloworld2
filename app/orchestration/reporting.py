@@ -29,6 +29,19 @@ class ReportArtifact(_Artifact):
     created_at: datetime
 
 
+def deduplicate_citations(citations: list[CitationRef]) -> list[CitationRef]:
+    """Remove exact (evidence_id, span) duplicates while preserving order."""
+    seen: set[tuple[str, str]] = set()
+    result: list[CitationRef] = []
+    for citation in citations:
+        key = (citation.evidence_id, citation.span)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(citation)
+    return result
+
+
 class RenderCandidate(_Artifact):
     candidate: RenderDraft
     guard_feedback: tuple[Violation, ...] = ()
@@ -73,7 +86,14 @@ def build_report_artifact(
     citation_views: dict[str, RenderCitationView],
     created_at: datetime,
 ) -> ReportArtifact:
-    slots = [RenderedSlotArtifact(**item.model_dump()) for item in draft.slots]
+    slots = [
+        RenderedSlotArtifact(
+            slot_no=item.slot_no,
+            text=item.text,
+            citations=deduplicate_citations(item.citations),
+        )
+        for item in draft.slots
+    ]
     keys = sorted({citation.evidence_id for item in slots for citation in item.citations})
     return ReportArtifact(
         rendered_slots=slots,

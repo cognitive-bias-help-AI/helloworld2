@@ -130,13 +130,46 @@ test("numeric, findings, uncertainty and provider limitations are exposed only f
   assert.equal(view.numericChecks.length, 1);
   assert.equal(view.findings[0].kindLabel, "내용 불일치");
   assert.deepEqual(view.claims[2].missingDimensions, [6]);
-  assert.deepEqual(view.claims[2].uncertaintyLabels, ["근거 범위가 일부 제한됨"]);
+  assert.deepEqual(view.claims[2].uncertaintyLabels, ["일부 근거만 검토되어 판단 범위가 제한되었습니다."]);
   assert.equal(view.providerCollections[0].statusLabel, "일부 자료만 수집됨");
   const empty = resultFixture();
   empty.claims.forEach((claim) => { if (claim.evaluation) claim.evaluation.numericChecks = []; });
   empty.findings = [];
   assert.equal(buildReviewResultView(empty).numericChecks.length, 0);
   assert.equal(buildReviewResultView(empty).findings.length, 0);
+});
+
+test("raw limitation codes are not used as normal user-facing wording", () => {
+  const view = buildReviewResultView(resultFixture());
+  assert.equal(view.banners[0].label, "일부 근거만 검토되어 판단 범위가 제한되었습니다.");
+  assert.equal(view.banners[1].label, "일부 자료원을 사용할 수 없어 검토 범위가 제한되었습니다.");
+  assert.ok(!view.banners[0].label.includes("coverage_truncated"));
+  assert.ok(!view.claims[2].uncertaintyLabels[0].includes("coverage_truncated"));
+});
+
+test("findings resolve to actionable Korean text and fall back to slot wording", () => {
+  const view = buildReviewResultView(resultFixture());
+  assert.match(view.findings[0].message, /claim support/);
+  const fallback = resultFixture();
+  fallback.findings = [{ ...fallback.findings[0], kind: "unverified", claimEvaluationId: null }];
+  assert.equal(buildReviewResultView(fallback).findings[0].message, "주요 판단 근거에 필요한 자료를 충분히 확인하지 못했습니다.");
+});
+
+test("summary counts are deterministic and do not become investment advice", () => {
+  const view = buildReviewResultView(resultFixture());
+  assert.deepEqual(view.summaryCounts, [
+    { key: "confirmed", label: "확인됨", count: 1 },
+    { key: "partial", label: "일부 확인", count: 1 },
+    { key: "difficult", label: "확인 어려움", count: 2 },
+    { key: "needs_review", label: "다시 확인", count: 1 },
+  ]);
+  assert.ok(!JSON.stringify(view).match(/매수|매도|추천/));
+});
+
+test("report slots expose canonical slot labels instead of generic review item text", () => {
+  const view = buildReviewResultView(resultFixture());
+  assert.equal(view.report.slots[0].label, "현재 판단");
+  assert.notEqual(view.report.slots[0].label, "검토 항목");
 });
 
 test("opposing search unverified never claims that opposing evidence is absent", () => {

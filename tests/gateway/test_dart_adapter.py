@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -251,8 +252,12 @@ def test_financial_statement는_요청한_계정만_EvidenceDraft로_parse한다
         "value": 9178955000000,
         "current_value": 9178955000000,
         "prior_value": None,
+        "current_period_value": 9178955000000,
+        "prior_period_value": None,
         "current_cumulative_value": None,
+        "prior_cumulative_value": None,
         "prior_comparable_value": None,
+        "comparison_basis": "ANNUAL",
         "comparison_available": False,
         "change_direction": None,
         "unit": "KRW",
@@ -283,6 +288,113 @@ def test_financial_statement는_당기와전기_비교값을_보존한다():
     assert record.prior_amount == 8000000000000
     assert record.current_cumulative_amount == 9178955000000
     assert record.prior_comparable_amount == 8000000000000
+
+
+def interim_response(*, statement_code="IS") -> dict:
+    raw = deepcopy(success_response())
+    row = raw["list"][0]
+    row.update(
+        {
+            "sj_div": statement_code,
+            "thstrm_amount": "30",
+            "frmtrm_amount": "100",
+            "frmtrm_q_amount": "20",
+            "thstrm_add_amount": "90",
+            "frmtrm_add_amount": "80",
+        }
+    )
+    return raw
+
+
+def test_financial_statement는_분기_동기기간을_명시하면_frmtrm_q_amount와_비교한다():
+    record = parse_financial_statement(
+        interim_response(),
+        corp_code="00126380", business_year="2025", report_code="11014", fs_div="CFS",
+        account_names=("영업이익",), comparison_basis="INTERIM_PERIOD",
+    )[0]
+    draft = record_to_evidence_draft(record)
+    assert record.prior_period_amount == 20
+    assert draft.normalized_value["current_value"] == 30
+    assert draft.normalized_value["prior_value"] == 20
+    assert draft.normalized_value["comparison_basis"] == "INTERIM_PERIOD"
+    assert draft.normalized_value["change_direction"] == "increase"
+
+
+def test_financial_statement는_분기_동기기간이_없으면_전기값으로_대체하지_않는다():
+    raw = interim_response()
+    raw["list"][0].pop("frmtrm_q_amount")
+    record = parse_financial_statement(
+        raw,
+        corp_code="00126380", business_year="2025", report_code="11014", fs_div="CFS",
+        account_names=("영업이익",), comparison_basis="INTERIM_PERIOD",
+    )[0]
+    normalized = record_to_evidence_draft(record).normalized_value
+    assert normalized["comparison_available"] is False
+    assert normalized["change_direction"] is None
+    assert normalized["prior_value"] is None
+
+
+def test_financial_statement는_누적기간은_누적필드끼리만_비교한다():
+    raw = interim_response()
+    raw["list"][0]["frmtrm_add_amount"] = "100"
+    record = parse_financial_statement(
+        raw,
+        corp_code="00126380", business_year="2025", report_code="11014", fs_div="CFS",
+        account_names=("영업이익",), comparison_basis="INTERIM_CUMULATIVE",
+    )[0]
+    normalized = record_to_evidence_draft(record).normalized_value
+    assert normalized["current_value"] == 90
+    assert normalized["prior_value"] == 100
+    assert normalized["comparison_basis"] == "INTERIM_CUMULATIVE"
+    assert normalized["change_direction"] == "decrease"
+
+
+def test_financial_statement는_누적_이전값이_없으면_분기값으로_대체하지_않는다():
+    raw = interim_response()
+    raw["list"][0].pop("frmtrm_add_amount")
+    record = parse_financial_statement(
+        raw,
+        corp_code="00126380", business_year="2025", report_code="11014", fs_div="CFS",
+        account_names=("영업이익",), comparison_basis="INTERIM_CUMULATIVE",
+    )[0]
+    normalized = record_to_evidence_draft(record).normalized_value
+    assert normalized["comparison_available"] is False
+    assert normalized["change_direction"] is None
+
+
+def test_financial_statement는_분기_비교기준이_없으면_fail_closed한다():
+    record = parse_financial_statement(
+        interim_response(),
+        corp_code="00126380", business_year="2025", report_code="11014", fs_div="CFS",
+        account_names=("영업이익",),
+    )[0]
+    normalized = record_to_evidence_draft(record).normalized_value
+    assert normalized["comparison_basis"] == "NOT_COMPARABLE"
+    assert normalized["comparison_available"] is False
+    assert normalized["change_direction"] is None
+
+
+def test_financial_statement는_BS에_분기_IS_비교규칙을_적용하지_않는다():
+    raw = interim_response(statement_code="BS")
+    record = parse_financial_statement(
+        raw,
+        corp_code="00126380", business_year="2025", report_code="11014", fs_div="CFS",
+        account_names=("영업이익",), comparison_basis="INTERIM_PERIOD",
+    )[0]
+    normalized = record_to_evidence_draft(record).normalized_value
+    assert normalized["comparison_basis"] == "NOT_COMPARABLE"
+    assert normalized["comparison_available"] is False
+
+
+def test_financial_statement는_frmtrm_q_amount를_엄격하게_파싱한다():
+    raw = interim_response()
+    raw["list"][0]["frmtrm_q_amount"] = "not-a-number"
+    with pytest.raises(ValueError, match="invalid DART amount"):
+        parse_financial_statement(
+            raw,
+            corp_code="00126380", business_year="2025", report_code="11014", fs_div="CFS",
+            account_names=("영업이익",), comparison_basis="INTERIM_PERIOD",
+        )
 
 
 def test_financial_statement의_비교값은_음수와_누락을_그대로_보존한다():
@@ -407,6 +519,36 @@ def test_financial_evidence는_당기전기와_결정적방향을_정규화한�
     assert normalized["prior_value"] == 8000000000000
     assert normalized["comparison_available"] is True
     assert normalized["change_direction"] == "increase"
+
+
+@pytest.mark.parametrize(
+    ("current", "prior", "direction"),
+    [("100", "120", "decrease"), ("100", "100", "unchanged")],
+)
+def test_financial_statement_annual_change_direction_is_deterministic(current, prior, direction):
+    raw = success_response()
+    raw["list"][0].update({"thstrm_amount": current, "frmtrm_amount": prior})
+    record = parse_financial_statement(
+        raw,
+        corp_code="00126380", business_year="2025", report_code="11011", fs_div="CFS",
+        account_names=("영업이익",),
+    )[0]
+    normalized = record_to_evidence_draft(record).normalized_value
+    assert normalized["comparison_available"] is True
+    assert normalized["change_direction"] == direction
+
+
+def test_financial_statement_annual_missing_prior_is_unavailable():
+    raw = success_response()
+    raw["list"][0]["frmtrm_amount"] = ""
+    record = parse_financial_statement(
+        raw,
+        corp_code="00126380", business_year="2025", report_code="11011", fs_div="CFS",
+        account_names=("영업이익",),
+    )[0]
+    normalized = record_to_evidence_draft(record).normalized_value
+    assert normalized["comparison_available"] is False
+    assert normalized["change_direction"] is None
 
 
 def test_DART_Core는_raw를_app_type없이_DartFinancialRecord로_parse한다():
