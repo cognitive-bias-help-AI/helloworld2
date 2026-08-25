@@ -34,7 +34,7 @@ from app.contexts.views import (
     SlotTextView,
     VerifyPacket,
 )
-from app.diagnostics import debug_log
+from app.diagnostics import debug_log, safe_exception_fields
 from app.domain.evidence_need import EvidenceNeed, classify_evidence_need
 from app.domain.evidence_requirement import EvidenceCategory, EvidenceRole
 from app.domain.intake import (
@@ -1248,8 +1248,7 @@ def make_nodes(deps: RuntimeDeps):
                 event = "INTERRUPT" if type(error).__name__ == "GraphInterrupt" else "FAIL"
                 fields = {
                     "node": name,
-                    "exception_type": type(error).__name__,
-                    "error_code": getattr(error, "category", None),
+                    **safe_exception_fields(error),
                     "elapsed_ms": round((perf_counter() - started) * 1000, 1),
                 }
                 debug_log("graph", event, **fields)

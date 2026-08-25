@@ -118,7 +118,7 @@ def test_9개_semantic_View의_허용_필드가_고정된다():
         IntegrationView: {"evaluations", "oppose", "missing_slots"},
         GuardInput: {"slot_no", "text", "quoted", "citations"},
         RenderView: {"slots", "banners", "theory_notes", "citations", "guard_feedback"},
-        SemanticExtractionView: {"segments"},
+        SemanticExtractionView: {"segments", "correction"},
     }
 
     assert {model: set(model.model_fields) for model in expected} == expected
@@ -155,7 +155,8 @@ def test_SemanticExtractionView는_최소_segment_projection만_허용한다():
                 "locked_slot_id": None,
                 "text": "장기로 보고 있다 😀",
             },
-        ]
+        ],
+        "correction": None,
     }
     assert not {
         "origin",

@@ -160,7 +160,15 @@ async def test_n5_filters_canonical_non_verifiable_claims_before_query_construct
     assert all(
         item.provider == "dart"
         and item.endpoint == "disclosure_list"
-        and item.params == {"stock_code": "005930"}
+        and item.params == {
+            "stock_code": "005930",
+            "bgn_de": "20260215",
+            "end_de": "20260814",
+            "sort": "date",
+            "sort_mth": "desc",
+            "page_no": 1,
+            "page_count": 20,
+        }
         for item in claim_queries
         if item.provider == "dart"
     )

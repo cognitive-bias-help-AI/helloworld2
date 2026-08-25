@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from app.domain.account_concepts import ACCOUNT_CONCEPTS, dart_account_matches
+from app.domain.account_concepts import (
+    ACCOUNT_CONCEPTS,
+    dart_account_matches,
+    resolve_account_concepts,
+)
 from providers.dart.errors import require_success
 from providers.dart.models import DartFinancialRecord
 
@@ -41,6 +45,11 @@ def parse_financial_statement(
     selected = frozenset(account_names)
     if not selected:
         raise ValueError("account_names must not be empty")
+    selected_concepts = tuple(
+        concept
+        for concept, spec in ACCOUNT_CONCEPTS.items()
+        if any(account_id in selected for account_id in spec.dart_account_ids)
+    ) + resolve_account_concepts(" ".join(selected))
     rows = raw.get("list")
     if not isinstance(rows, list):
         raise ValueError("OpenDART success response requires list")
@@ -57,8 +66,7 @@ def parse_financial_statement(
                 account_name=account_name if isinstance(account_name, str) else "",
                 account_id=account_id_value if isinstance(account_id_value, str) else None,
             )
-            for concept in ACCOUNT_CONCEPTS
-            if account_name in selected or account_id_value in selected
+            for concept in selected_concepts
         )
         if not selected_match and not concept_match:
             continue

@@ -15,6 +15,7 @@ from app.orchestration.drafts import EvidenceIntentDraft, EvidenceRequirementDra
 from app.orchestration.evidence_intent import validate_grounded_intent
 from app.orchestration.evidence_planning import (
     RequirementStatus,
+    _resolution_for_source,
     plan_baseline_queries,
     plan_hybrid_claim,
 )
@@ -172,6 +173,34 @@ def test_baseline_dart_disclosure_uses_deterministic_lookback_from_as_of():
         "page_no": 1,
         "page_count": 20,
     }
+
+
+def test_claim_specific_dart_disclosure_reuses_baseline_retrieval_policy():
+    baseline = next(
+        q for q in plan_baseline_queries(
+            stock_code="005930",
+            stock_name="삼성전자",
+            as_of=NOW,
+            id_factory=iter([uid(16), uid(17), uid(18)]).__next__,
+            clock=lambda: NOW,
+        )
+        if q.provider == "dart"
+    )
+    source = next(
+        source
+        for source in EVIDENCE_REQUIREMENT_REGISTRY[EvidenceCategory.NEWS_EVENT].sources
+        if source.provider == "dart" and source.endpoint == "disclosure_list"
+    )
+    resolution = _resolution_for_source(
+        source,
+        EvidenceCategory.NEWS_EVENT,
+        "공시가 발표됐다",
+        stock_code="005930",
+        stock_name="삼성전자",
+        as_of=NOW,
+        topic_terms=[],
+    )
+    assert resolution.planned == (("dart", "disclosure_list", baseline.params),)
 
 
 def test_financial_requirement_plans_primary_and_corroborative_without_inventing_policy_facts():

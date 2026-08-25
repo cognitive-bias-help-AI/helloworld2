@@ -14,7 +14,7 @@ from app.assemblers.semantic_extraction import (
     assemble_semantic_extraction,
 )
 from app.contexts.budget import validate_context_budget
-from app.contexts.views import SemanticExtractionView, SemanticSegmentView
+from app.contexts.views import SemanticCorrectionView, SemanticExtractionView, SemanticSegmentView
 from app.diagnostics import debug_log
 from app.domain.ask_history import (
     AskRecord,
@@ -61,6 +61,7 @@ from app.orchestration.model_failure import (
     ModelFailureCause,
     classify_model_failure,
 )
+from app.orchestration.span_anchoring import reanchor_semantic_draft
 from app.schemas.frozen import ULID, Claim, NonBlankStr, SourceTrace
 from app.store.protocols import ReviewStore
 
@@ -125,7 +126,10 @@ class IntakeReviewResult(_RuntimeModel):
         return self
 
 
-def _semantic_view(segments: tuple[SemanticTextSegment, ...]) -> SemanticExtractionView:
+def _semantic_view(
+    segments: tuple[SemanticTextSegment, ...],
+    correction: SemanticCorrectionView | None = None,
+) -> SemanticExtractionView:
     return SemanticExtractionView(
         segments=tuple(
             SemanticSegmentView(
@@ -134,7 +138,8 @@ def _semantic_view(segments: tuple[SemanticTextSegment, ...]) -> SemanticExtract
                 text=item.text,
             )
             for item in segments
-        )
+        ),
+        correction=correction,
     )
 
 
@@ -158,12 +163,13 @@ async def _invoke_and_assemble(
             run_started_at=run_started_at,
         )
 
-    view = _semantic_view(segments)
-    validate_context_budget("n3", view)
     completed_attempts = 0
+    correction = None
     while True:
         completed_attempts += 1
         prompt_version = "n3/v2" if completed_attempts == 1 else "n3/v2/corrective"
+        view = _semantic_view(segments, correction)
+        validate_context_budget("n3", view)
         try:
             draft, _ = await model_gateway.invoke(
                 "SMALL", prompt_version, view, SemanticExtractionDraft
@@ -185,8 +191,9 @@ async def _invoke_and_assemble(
                 continue
             raise TypeError("model gateway returned a non-SemanticExtractionDraft")
         try:
+            anchored_draft = reanchor_semantic_draft(draft, segments)
             return assemble_semantic_extraction(
-                draft,
+                anchored_draft,
                 run_id=run_id,
                 projection_version=SEMANTIC_PROJECTION_VERSION,
                 segments=segments,
@@ -208,6 +215,12 @@ async def _invoke_and_assemble(
                 completed_model_attempts=completed_attempts,
             )
             if decision.retry_allowed:
+                correction = SemanticCorrectionView(
+                    category=exc.category,
+                    slot_id=exc.slot_id,
+                    semantic_kind=exc.semantic_kind,
+                    segment_id=exc.segment_id,
+                )
                 continue
             raise
 

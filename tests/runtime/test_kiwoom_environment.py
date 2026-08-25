@@ -49,6 +49,16 @@ def test_invalid_kiwoom_environment_fails_closed(monkeypatch):
         _adapters(httpx.AsyncClient(), corp_cache="missing.json")
 
 
+@pytest.mark.parametrize("value", [None, ""])
+def test_kiwoom_unconfigured_is_optional(monkeypatch, value):
+    monkeypatch.delenv("KIWOOM_ENV", raising=False)
+    if value is not None:
+        monkeypatch.setenv("KIWOOM_ENV", value)
+    adapters, missing, _ = _adapters(httpx.AsyncClient(), corp_cache="missing.json")
+    assert "kiwoom" not in adapters
+    assert "kiwoom" in missing
+
+
 @pytest.mark.parametrize("environment,missing", [("mock", "KIWOOM_MOCK_APP_KEY"), ("production", "KIWOOM_PROD_APP_KEY")])
 def test_selected_kiwoom_environment_requires_its_own_credentials(monkeypatch, environment, missing):
     set_kiwoom(monkeypatch, environment, mock=False, production=False)

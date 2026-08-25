@@ -97,8 +97,16 @@ class SemanticSegmentView(_ViewModel):
     text: NonBlankStr
 
 
+class SemanticCorrectionView(_ViewModel):
+    category: NonBlankStr
+    slot_id: SlotId | None = None
+    semantic_kind: NonBlankStr | None = None
+    segment_id: NonBlankStr | None = None
+
+
 class SemanticExtractionView(_ViewModel):
     segments: tuple[SemanticSegmentView, ...]
+    correction: SemanticCorrectionView | None = None
 
 
 class AskBackContext(_ViewModel):

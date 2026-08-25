@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import cli
+from app.models.mlapi_gateway import MlApiGatewayError
 from app.schemas.frozen import Usage
 
 
@@ -51,3 +52,45 @@ async def test_preflight_failure_does_not_print_provider_secret(monkeypatch, cap
 
     assert await cli._preflight() == 1
     assert "super-secret-test-value" not in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_preflight_gateway_failure_prints_safe_code_and_not_schema_unsupported(monkeypatch, capsys):
+    class FailingGateway:
+        async def invoke(self, *_args, **_kwargs):
+            raise MlApiGatewayError("authentication")
+
+    @asynccontextmanager
+    async def fake_model_runtime():
+        yield SimpleNamespace(gateway=FailingGateway())
+
+    monkeypatch.setattr(cli, "compose_local_model_runtime", fake_model_runtime)
+
+    assert await cli._preflight() == 1
+    output = capsys.readouterr().out
+    assert "MlApiGatewayError:authentication" in output
+    assert "MODEL GATEWAY failure" in output
+    assert "구조화 출력으로 못 받는다" not in output
+
+
+@pytest.mark.asyncio
+async def test_preflight_gateway_failure_counts_first_and_retry_separately(monkeypatch, capsys):
+    class FailingGateway:
+        def __init__(self):
+            self.calls = 0
+
+        async def invoke(self, *_args, **_kwargs):
+            self.calls += 1
+            raise MlApiGatewayError("connectivity")
+
+    gateway = FailingGateway()
+
+    @asynccontextmanager
+    async def fake_model_runtime():
+        yield SimpleNamespace(gateway=gateway)
+
+    monkeypatch.setattr(cli, "compose_local_model_runtime", fake_model_runtime)
+    assert await cli._preflight() == 1
+    output = capsys.readouterr().out
+    assert "first-attempt gateway failures=7" in output
+    assert "retry gateway failures=0" in output

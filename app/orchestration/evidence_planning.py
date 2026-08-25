@@ -78,6 +78,21 @@ _UNITS: Final[dict[str, str]] = {
     "천주": "thousand_shares",
     "백만원": "million_krw",
 }
+
+
+def disclosure_query_params(*, stock_code: str, as_of: datetime) -> dict[str, object]:
+    """Return the single governed DART disclosure retrieval policy."""
+    end_de = as_of.date()
+    bgn_de = end_de - timedelta(days=DISCLOSURE_LOOKBACK_DAYS)
+    return {
+        "stock_code": stock_code,
+        "bgn_de": bgn_de.strftime("%Y%m%d"),
+        "end_de": end_de.strftime("%Y%m%d"),
+        "sort": "date",
+        "sort_mth": "desc",
+        "page_no": 1,
+        "page_count": 20,
+    }
 _VALID_FLOW_UNITS: Final[frozenset[tuple[str, str]]] = frozenset(
     {("quantity", "shares"), ("quantity", "thousand_shares"), ("amount", "million_krw")}
 )
@@ -216,7 +231,11 @@ def resolve_parameters(
 
     if need is EvidenceNeed.DISCLOSURE:
         return ParameterResolution(
-            planned=(("dart", "disclosure_list", {"stock_code": stock_code}),)
+            planned=((
+                "dart",
+                "disclosure_list",
+                disclosure_query_params(stock_code=stock_code, as_of=as_of),
+            ),)
         )
 
     if need is EvidenceNeed.NEWS:
@@ -413,21 +432,11 @@ def plan_baseline_queries(
     clock: Callable[[], datetime],
 ) -> tuple[Query, ...]:
     """Build the review-level context plan; provider availability is an n6 concern."""
-    end_de = as_of.date()
-    bgn_de = end_de - timedelta(days=DISCLOSURE_LOOKBACK_DAYS)
     specifications = [
         (
             "dart",
             "disclosure_list",
-            {
-                "stock_code": stock_code,
-                "bgn_de": bgn_de.strftime("%Y%m%d"),
-                "end_de": end_de.strftime("%Y%m%d"),
-                "sort": "date",
-                "sort_mth": "desc",
-                "page_no": 1,
-                "page_count": 20,
-            },
+            disclosure_query_params(stock_code=stock_code, as_of=as_of),
         ),
         (
             "naver",
@@ -484,7 +493,15 @@ def _resolution_for_source(
             ),)
         )
     if source.endpoint == "disclosure_list":
-        return ParameterResolution(planned=(("dart", source.endpoint, {"stock_code": stock_code}),))
+        return ParameterResolution(
+            planned=(
+                (
+                    "dart",
+                    source.endpoint,
+                    disclosure_query_params(stock_code=stock_code, as_of=as_of),
+                ),
+            )
+        )
     if source.endpoint == "daily_price_history":
         return resolve_parameters(
             EvidenceNeed.MARKET_PRICE,
@@ -619,6 +636,7 @@ __all__ = [
     "RequirementStatus",
     "missing_parameters",
     "plan_baseline_queries",
+    "disclosure_query_params",
     "plan_claim_queries",
     "plan_hybrid_claim",
     "resolve_parameters",

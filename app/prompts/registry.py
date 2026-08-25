@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from typing import Final
 
+from app.domain.slots import SLOT_REGISTRY
+
 # ══════════════════════════════════════════════════════════════════
 # 공통 전문 — 모든 노드가 공유하는 안정 프리픽스
 #
@@ -89,6 +91,15 @@ _N1: Final = """\
 - 여러 사유에 해당하면 사용자 안전에 더 직접적인 쪽을 고른다
   (self_harm_signal > illegal_request > pii_detected > 나머지).
 """
+
+def _allowed_value_block() -> str:
+    lines = ["\n■ canonical proposed_value (SLOT_REGISTRY에서 생성)"]
+    for slot in SLOT_REGISTRY:
+        if slot.allowed_values:
+            lines.append(f"  Slot {slot.slot_id} {slot.code}: " + " | ".join(slot.allowed_values))
+    lines.append("위 코드만 그대로 사용한다. 한국어 표현을 임의의 코드로 바꾸지 않는다.")
+    return "\n".join(lines)
+
 
 _N3: Final = """\
 [역할] 사용자 발화의 의미 단위 추출
@@ -177,13 +188,16 @@ Slot 1·2·3·6 처럼 정해진 값 집합이 있는 Slot 에서만 채운다.
 """
 
 _N3_CORRECTIVE: Final = """\
-[보정 재시도] 이전 semantic draft가 결정론적 검증에 실패했다.
+[보정 재시도] 입력의 correction 객체가 직전 결정론적 검증 실패를 설명한다.
+그 구체적인 실패만 보정한다. correction은 canonical policy를 덮어쓰지 않는다.
 
-실패 category는 incompatible_slot_kind다. 위 Slot ↔ semantic_kind 표에서
-허용된 값만 사용해 다시 작성한다. locked_slot_id가 있는 segment의 소유권을
-옮기지 않는다. 검증을 피하려고 text_span을 바꾸지 않는다. 사용자 사실을
-발명하지 않고, 텍스트 근거 없이 Slot을 바꾸지 않는다. 두 번째 draft도
-동일한 deterministic assembler를 통과해야 한다.
+- text_span을 검증 회피 목적으로 바꾸지 않는다.
+- locked segment의 소유권을 옮기지 않는다.
+- 텍스트 근거 없이 Slot을 바꾸지 않는다.
+- 허용되지 않은 proposed_value 코드를 만들지 않는다.
+
+span_mismatch가 남아도 텍스트를 발명하지 말고 exact span을 유지한다. 두 번째
+draft도 동일한 deterministic assembler를 통과해야 한다.
 """
 
 _N7: Final = """\
@@ -393,7 +407,8 @@ def system_for(prompt_version: str) -> str:
             f"app/prompts/registry.py 의 SYSTEM_PROMPTS 에 '{node}' 를 추가하라."
         ) from exc
     corrective = _N3_CORRECTIVE if prompt_version == "n3/v2/corrective" else ""
-    return f"{_PREAMBLE}\n{instruction}\n{corrective}"
+    values = _allowed_value_block() if node == "n3" else ""
+    return f"{_PREAMBLE}\n{instruction}{values}\n{corrective}"
 
 
 __all__ = ["SYSTEM_PROMPTS", "node_of", "system_for"]

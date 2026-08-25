@@ -14,7 +14,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.cli import initial_state
-from app.diagnostics import debug_enabled, debug_log
+from app.diagnostics import debug_enabled, debug_log, safe_exception_fields
 from app.domain.intake import (
     FreeTextInput,
     HybridIntake,
@@ -251,7 +251,7 @@ async def serve(read_message: Any, emit: Any, *, runtime: Any) -> None:
     except BaseException as error:
         debug_log(
             "review", "failure", run_id=run_id, thread_id=run_id, phase=phase,
-            command=command, exception_type=type(error).__name__,
+            command=command, **safe_exception_fields(error),
         )
         await emit({"kind": "error", **public_error(error)})
 
@@ -289,7 +289,7 @@ async def _stdio_main() -> None:
             debug_log("review", "runtime composition completed")
             await serve(read_message, emit, runtime=runtime)
     except BaseException as error:
-        debug_log("review", "composition failure", exception_type=type(error).__name__)
+        debug_log("review", "composition failure", **safe_exception_fields(error))
         await emit({"kind": "error", **public_error(error)})
     finally:
         debug_log("review", "worker terminating")

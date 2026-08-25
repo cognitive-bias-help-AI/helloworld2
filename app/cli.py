@@ -26,6 +26,7 @@ from uuid import uuid4
 from langgraph.types import Command
 from pydantic import BaseModel
 
+from app.models.mlapi_gateway import MlApiGatewayError
 from app.runtime.local import (
     DEFAULT_CORP_CACHE,
     DEFAULT_DIRECTORY,
@@ -99,6 +100,11 @@ async def _preflight() -> int:
     n3·n10 만 400 으로 죽는 것을 미리 잡기 위한 명령이다.
     """
     failures = 0
+    model_invocations = 0
+    gateway_failures = 0
+    first_attempt_gateway_failures = 0
+    retry_gateway_failures = 0
+    schema_failures = 0
     slot_by_node = {
         "n1": "SMALL", "n3": "SMALL", "n7": "SMALL",
         "n8": "LARGE", "n9": "LARGE", "n10": "LARGE", "n11": "MID",
@@ -111,18 +117,32 @@ async def _preflight() -> int:
         for node, schema in _draft_schemas():
             slot = slot_by_node[node]
             try:
+                model_invocations += 1
                 await model_runtime.gateway.invoke(
                     slot, f"{node}/v1", _PreflightInput(), schema
                 )
-            except Exception as exc:  # noqa: BLE001 - 어떤 실패든 그대로 보고한다
+            except MlApiGatewayError as exc:
                 failures += 1
+                gateway_failures += 1
+                first_attempt_gateway_failures += 1
+                _out(f"  [FAIL] {node:4} {schema.__name__:24} MlApiGatewayError:{exc.code}")
+            except Exception as exc:  # noqa: BLE001 - preflight rejection is safe by type
+                failures += 1
+                schema_failures += 1
                 _out(f"  [FAIL] {node:4} {schema.__name__:24} {type(exc).__name__}")
             else:
                 _out(f"  [ok]   {node:4} {schema.__name__:24} 수용")
     _out()
     if failures:
-        _out(f"{failures}건 거부됨. 해당 스키마는 구조화 출력으로 못 받는다.")
-        _out("→ 그 노드만 JSON 지시 + 수동 검증으로 우회해야 한다.")
+        if gateway_failures:
+            _out(
+                f"MODEL GATEWAY failure: {gateway_failures}건 "
+                f"(total model invocations={model_invocations}, "
+                f"first-attempt gateway failures={first_attempt_gateway_failures}, "
+                f"retry gateway failures={retry_gateway_failures})"
+            )
+        if schema_failures:
+            _out(f"SCHEMA/PREFLIGHT rejection: {schema_failures}건")
     else:
         _out("7개 노드 스키마 전부 수용됨.")
     return 1 if failures else 0

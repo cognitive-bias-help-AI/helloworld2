@@ -14,12 +14,35 @@ from app.runtime.ids import generate_ulid
 from app.runtime.local import (
     DEFAULT_DIRECTORY,
     _capacities,
+    _select_stock_resolver,
     compose_local_runtime,
     initial_state,
     load_dotenv,
 )
 from app.schemas.frozen import ULID
 from tests.domain.test_stock_master import snapshot
+
+
+def test_local_stock_resolver_uses_snapshot_when_present(tmp_path):
+    snapshot_path = tmp_path / "krx.json"
+    write_stock_master_atomic(snapshot_path, snapshot())
+    resolver = _select_stock_resolver(snapshot_path, tmp_path / "aliases.csv")
+    assert isinstance(resolver, StockMasterResolver)
+
+
+def test_local_stock_resolver_falls_back_to_csv_when_snapshot_absent(tmp_path):
+    csv_path = tmp_path / "stocks.csv"
+    csv_path.write_text(
+        "code,name,market,asset_type,aliases,is_delisted,is_managed\n"
+        "005930,삼성전자,KOSPI,COMMON_STOCK,삼전,0,0\n", encoding="utf-8"
+    )
+    resolver = _select_stock_resolver(tmp_path / "missing.json", csv_path)
+    assert resolver.resolve_exact("005930")[0].name == "삼성전자"
+
+
+def test_local_stock_resolver_fails_clearly_when_both_sources_absent(tmp_path):
+    with pytest.raises(FileNotFoundError, match="stock resolver"):
+        _select_stock_resolver(tmp_path / "missing.json", tmp_path / "missing.csv")
 
 
 def test_initial_state가_ReviewState의_모든_채널을_채운다():
@@ -250,7 +273,10 @@ async def test_default_runtime은_snapshot_missing_malformed_empty를_CSV로_fal
         if body is not None:
             master.write_text(body, encoding="utf-8")
         with pytest.raises((FileNotFoundError, ValueError)):
-            async with compose_local_runtime(stock_master_path=master):
+            async with compose_local_runtime(
+                stock_master_path=master,
+                alias_overlay_path=tmp_path / f"missing-{index}.csv",
+            ):
                 pass
 
 

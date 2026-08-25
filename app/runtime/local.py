@@ -156,7 +156,7 @@ def _adapters(
         missing.append("dart")
         notes.append("DART_API_KEY 없음 - 재무·공시 근거 수집 불가")
 
-    kiwoom_environment_name = os.environ.get("KIWOOM_ENV")
+    kiwoom_environment_name = _env("KIWOOM_ENV")
     if kiwoom_environment_name is None:
         missing.append("kiwoom")
         notes.append("KIWOOM_ENV 없음 - 키움 upstream 환경과 자격증명 미설정")
@@ -202,6 +202,27 @@ def _capacities(adapters: Mapping[str, ProviderAdapter]) -> dict[str, int]:
             raise ValueError(f"provider admission capacity must be positive: {provider}")
         capacities[provider] = capacity
     return capacities
+
+
+def _select_stock_resolver(
+    stock_master_path: str | Path,
+    alias_overlay_path: str | Path,
+):
+    master_path = Path(stock_master_path)
+    overlay_path = Path(alias_overlay_path)
+    if master_path.exists():
+        snapshot = load_stock_master(master_path)
+        aliases = (
+            load_alias_overlay(overlay_path, snapshot.records)
+            if overlay_path.exists()
+            else {}
+        )
+        debug_log("stock", "RESOLVER", source="krx_snapshot")
+        return StockMasterResolver(snapshot, aliases=aliases)
+    if overlay_path.exists():
+        debug_log("stock", "RESOLVER", source="csv_fallback")
+        return CsvStockDirectory.from_csv(overlay_path)
+    raise FileNotFoundError("local stock resolver requires KRX snapshot or CSV directory")
 
 
 def _model_backend() -> str:
@@ -293,9 +314,7 @@ async def compose_local_runtime(
         if directory_path is not None:
             stock_resolver = CsvStockDirectory.from_csv(directory_path)
         else:
-            stock_master = load_stock_master(stock_master_path)
-            aliases = load_alias_overlay(alias_overlay_path, stock_master.records)
-            stock_resolver = StockMasterResolver(stock_master, aliases=aliases)
+            stock_resolver = _select_stock_resolver(stock_master_path, alias_overlay_path)
         deps = RuntimeDeps(
             review_store=MemoryReviewStore(),
             evidence_store=MemoryEvidenceStore(),

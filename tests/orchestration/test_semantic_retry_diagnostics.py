@@ -60,6 +60,28 @@ async def test_incompatible_semantics_receive_corrective_retry_and_assemble(monk
     assert 'slot_id=6' in diagnostic
     assert 'semantic_kind="USER_PREFERENCE"' in diagnostic
     assert TEXT not in diagnostic
+    correction = gateway.calls[1][2].correction
+    assert correction.category == "incompatible_slot_kind"
+    assert correction.slot_id == 6
+    assert correction.semantic_kind == "USER_PREFERENCE"
+    assert correction.segment_id == "free_text:0"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_category", ["invalid_proposed_value", "missing_proposed_value"])
+async def test_corrective_retry_carries_actual_value_failure_category(monkeypatch, bad_category):
+    first = draft(SemanticKind.INFORMATION_CHECKED)
+    if bad_category == "invalid_proposed_value":
+        first = first.model_copy(update={"units": [first.units[0].model_copy(update={"proposed_value": ("INVALID",)})]})
+    else:
+        first = first.model_copy(update={"units": [first.units[0].model_copy(update={"proposed_value": None})]})
+    gateway = Gateway([first, draft(SemanticKind.INFORMATION_CHECKED)])
+    await _invoke_and_assemble(
+        run_id="run-1", segments=segments(), structured_answers=(),
+        existing_verifiable_claim_count=0, run_started_at=datetime.now(UTC),
+        model_gateway=gateway,
+    )
+    assert gateway.calls[1][2].correction.category == bad_category
 
 
 @pytest.mark.asyncio

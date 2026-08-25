@@ -363,6 +363,34 @@ def test_financial_statement는_허용된_account_id로도_행을_채택한다()
     assert [record.account_name for record in records] == ["영업이익"]
 
 
+def test_financial_statement는_canonical_concept로_공식_account_id와_영업손익을_채택한다():
+    raw = success_response()
+    raw["list"][0].update({"account_nm": "영업손익"})
+    records = parse_financial_statement(
+        raw,
+        corp_code="00126380",
+        business_year="2025",
+        report_code="11011",
+        fs_div="CFS",
+        account_names=("영업이익",),
+    )
+    assert [record.account_name for record in records] == ["영업손익"]
+
+
+def test_financial_statement는_알려지지_않은_account_id를_concept로_추론하지_않는다():
+    raw = success_response()
+    raw["list"][0].update({"account_nm": "영업손익", "account_id": "dart_Unknown"})
+    records = parse_financial_statement(
+        raw,
+        corp_code="00126380",
+        business_year="2025",
+        report_code="11011",
+        fs_div="CFS",
+        account_names=("영업이익",),
+    )
+    assert records == []
+
+
 def test_financial_evidence는_당기전기와_결정적방향을_정규화한다():
     raw = success_response()
     raw["list"][0]["frmtrm_amount"] = "8,000,000,000,000"
