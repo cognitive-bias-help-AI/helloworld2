@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any, Protocol
 
+import httpx
+
 
 class Environment(StrEnum):
     PRODUCTION = "production"
@@ -23,7 +25,13 @@ class ResultStatus(StrEnum):
 
 class ErrorCategory(StrEnum):
     INVALID_REQUEST = "invalid_request"
+    INPUT_VALIDATION = "input_validation"
     RATE_LIMIT = "rate_limit"
+    SYMBOL_NOT_FOUND = "symbol_not_found"
+    INVALID_CREDENTIAL = "invalid_credential"
+    INVALID_TOKEN = "invalid_token"
+    MODE_MISMATCH = "mode_mismatch"
+    DEVICE_AUTH = "device_auth"
     AUTH = "auth"
     IP_MISMATCH = "ip_mismatch"
     PROVIDER_CONTRACT = "provider_contract"
@@ -137,13 +145,14 @@ _BASE_URLS = {
 }
 _KST = timezone(timedelta(hours=9))
 _RATE_LIMIT_CODES = frozenset({1700, 1701, 1702})
-_RETRYABLE_AUTH_CODES = frozenset({8003, 8005, 8103})
-_AUTH_CODES = frozenset(
-    {8001, 8002, 8003, 8005, 8006, 8009, 8011, 8012, 8015, 8016, 8020, 8030, 8031, 8040, 8050, 8103}
-)
-_PROVIDER_CONTRACT_CODES = frozenset({1501, 1504, 1505, 1687}) | frozenset(
-    range(1511, 1518)
-)
+_RETRYABLE_AUTH_CODES = frozenset({8005, 8031, 8103})
+_INPUT_VALIDATION_CODES = frozenset({1501, 1504, 1505, 1687, 8020}) | frozenset(range(1511, 1518))
+_SYMBOL_NOT_FOUND_CODES = frozenset({1901, 1902})
+_INVALID_CREDENTIAL_CODES = frozenset({8001, 8002, 8011, 8012})
+_INVALID_TOKEN_CODES = frozenset({8003, 8005, 8006, 8009, 8015, 8016})
+_MODE_MISMATCH_CODES = frozenset({8030, 8031})
+_DEVICE_AUTH_CODES = frozenset({8010, 8040, 8050, 8103})
+_PROVIDER_CONTRACT_CODES = frozenset({1701, 1702})
 _STOCK_CODE = re.compile(r"^[0-9]{6}(?:_(?:NX|AL))?$")
 
 
@@ -164,6 +173,7 @@ class KiwoomAdapter:
         clock: Clock | None = None,
         refresh_margin: timedelta = timedelta(minutes=1),
         transport_errors: tuple[type[BaseException], ...] = (
+            httpx.RequestError,
             TimeoutError,
             ConnectionError,
             OSError,
@@ -305,11 +315,19 @@ class KiwoomAdapter:
                 status,
                 RateLimitInfo(message, retry_after),
             )
-        if code == 8010:
-            return ProviderError(ErrorCategory.IP_MISMATCH, message, False, code, status)
-        if code in _AUTH_CODES:
+        if code in _INPUT_VALIDATION_CODES:
+            return ProviderError(ErrorCategory.INPUT_VALIDATION, message, False, code, status)
+        if code in _SYMBOL_NOT_FOUND_CODES:
+            return ProviderError(ErrorCategory.SYMBOL_NOT_FOUND, message, False, code, status)
+        if code in _INVALID_CREDENTIAL_CODES:
+            return ProviderError(ErrorCategory.INVALID_CREDENTIAL, message, False, code, status)
+        if code in _INVALID_TOKEN_CODES:
+            return ProviderError(ErrorCategory.INVALID_TOKEN, message, code in _RETRYABLE_AUTH_CODES, code, status)
+        if code in _MODE_MISMATCH_CODES:
+            return ProviderError(ErrorCategory.MODE_MISMATCH, message, code in _RETRYABLE_AUTH_CODES, code, status)
+        if code in _DEVICE_AUTH_CODES:
             return ProviderError(
-                ErrorCategory.AUTH,
+                ErrorCategory.DEVICE_AUTH,
                 message,
                 code in _RETRYABLE_AUTH_CODES,
                 code,

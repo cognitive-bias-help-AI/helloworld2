@@ -72,6 +72,12 @@ class SequenceHttp:
         return self.responses.pop(0)
 
 
+class ConnectErrorHttp:
+    async def post(self, url, *, headers, json):
+        del url, headers, json
+        raise httpx.ConnectError("connectivity failure")
+
+
 def success_result(tr: str, data) -> AdapterResult:
     return AdapterResult(
         status=ResultStatus.SUCCESS,
@@ -151,6 +157,48 @@ def test_검증되지_않은_영문_KRX코드는_Kiwoom_upstream_request로_만�
             ),
             NOW,
         )
+
+
+@pytest.mark.parametrize(
+    ("return_code", "category", "retryable"),
+    [
+        (8020, "input_validation", False),
+        (1901, "symbol_not_found", False),
+        (1902, "symbol_not_found", False),
+        (8001, "invalid_credential", False),
+        (8003, "invalid_token", False),
+        (8030, "mode_mismatch", False),
+        (8031, "mode_mismatch", True),
+        (8010, "device_auth", False),
+        (8040, "device_auth", False),
+        (8050, "device_auth", False),
+        (8103, "device_auth", True),
+        (1700, "rate_limit", True),
+    ],
+)
+def test_core는_official_return_code_family를_정확히_분류한다(return_code, category, retryable):
+    adapter = CoreKiwoomAdapter(SequenceHttp(), KiwoomCredentials("app", "secret"))
+
+    error = adapter._classify_response(200, {}, {"return_code": return_code, "return_msg": "safe"})
+
+    assert error is not None
+    assert error.category.value == category
+    assert error.code == return_code
+    assert error.retryable is retryable
+
+
+@pytest.mark.asyncio
+async def test_core는_httpx_connect_error를_network로_normalize한다():
+    adapter = CoreKiwoomAdapter(ConnectErrorHttp(), KiwoomCredentials("app", "secret"))
+
+    result = await adapter.request(
+        KiwoomRequest("ka10007", {"stk_cd": "005930"}, Environment.MOCK)
+    )
+
+    assert result.status is ResultStatus.ERROR
+    assert result.error is not None
+    assert result.error.category.value == "network"
+    assert result.error.retryable is True
 
 
 @pytest.mark.asyncio
@@ -383,6 +431,36 @@ def test_Core_error_category를_Main_ReasonCode로_mapping한다(category, reaso
         assert hint is not None and hint.retry_after_ms == 3000
     else:
         assert hint is None
+
+
+@pytest.mark.parametrize(
+    ("category", "reason"),
+    [
+        (ErrorCategory.INPUT_VALIDATION, ReasonCode.SCHEMA_INVALID),
+        (ErrorCategory.SYMBOL_NOT_FOUND, ReasonCode.NO_RESULT),
+        (ErrorCategory.INVALID_CREDENTIAL, ReasonCode.AUTH_FAILED),
+        (ErrorCategory.INVALID_TOKEN, ReasonCode.AUTH_FAILED),
+        (ErrorCategory.MODE_MISMATCH, ReasonCode.AUTH_FAILED),
+        (ErrorCategory.DEVICE_AUTH, ReasonCode.AUTH_FAILED),
+        (ErrorCategory.HTTP_CLIENT, ReasonCode.NO_RESULT),
+        (ErrorCategory.PROVIDER, ReasonCode.NO_RESULT),
+    ],
+)
+def test_Core의_세부_분류는_가장_덜_오해를_부르는_ReasonCode로_mapping한다(category, reason):
+    adapter = KiwoomAdapter(
+        RecordingCore(success_result("ka10007", {})), environment=Environment.MOCK
+    )
+    raw = adapter.encode_result(
+        AdapterResult(
+            status=ResultStatus.ERROR,
+            provider="kiwoom",
+            tr="ka10007",
+            request_params={"stk_cd": "005930"},
+            error=ProviderError(category=category, message="safe", retryable=False, code=9999),
+        )
+    )
+
+    assert adapter.classify_error(raw) == (reason, False)
 
 
 @pytest.mark.asyncio

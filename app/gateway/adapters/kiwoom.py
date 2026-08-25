@@ -27,14 +27,20 @@ _SEMANTIC_TR = {
 }
 _ERROR_REASONS = {
     ErrorCategory.INVALID_REQUEST: ReasonCode.SCHEMA_INVALID,
+    ErrorCategory.INPUT_VALIDATION: ReasonCode.SCHEMA_INVALID,
     ErrorCategory.RATE_LIMIT: ReasonCode.RATE_LIMIT,
+    ErrorCategory.SYMBOL_NOT_FOUND: ReasonCode.NO_RESULT,
+    ErrorCategory.INVALID_CREDENTIAL: ReasonCode.AUTH_FAILED,
+    ErrorCategory.INVALID_TOKEN: ReasonCode.AUTH_FAILED,
+    ErrorCategory.MODE_MISMATCH: ReasonCode.AUTH_FAILED,
+    ErrorCategory.DEVICE_AUTH: ReasonCode.AUTH_FAILED,
     ErrorCategory.AUTH: ReasonCode.AUTH_FAILED,
     ErrorCategory.IP_MISMATCH: ReasonCode.IP_MISMATCH,
     ErrorCategory.PROVIDER_CONTRACT: ReasonCode.CONTRACT_VIOLATION,
     ErrorCategory.NETWORK: ReasonCode.UPSTREAM_TIMEOUT,
     ErrorCategory.HTTP_SERVER: ReasonCode.UPSTREAM_5XX,
-    ErrorCategory.HTTP_CLIENT: ReasonCode.SCHEMA_INVALID,
-    ErrorCategory.PROVIDER: ReasonCode.SCHEMA_INVALID,
+    ErrorCategory.HTTP_CLIENT: ReasonCode.NO_RESULT,
+    ErrorCategory.PROVIDER: ReasonCode.NO_RESULT,
 }
 
 
