@@ -172,6 +172,13 @@ test("report slots expose canonical slot labels instead of generic review item t
   assert.notEqual(view.report.slots[0].label, "검토 항목");
 });
 
+test("canonical report slots have unique slot numbers for keyed rendering", () => {
+  const view = buildReviewResultView(resultFixture());
+  const slotNumbers = view.report.slots.map((slot) => slot.slotNo);
+
+  assert.equal(new Set(slotNumbers).size, slotNumbers.length);
+});
+
 test("opposing search unverified never claims that opposing evidence is absent", () => {
   const view = buildReviewResultView(resultFixture());
   assert.equal(view.opposingSearch?.statusLabel, "반대 방향 근거 확인이 제한되었습니다.");

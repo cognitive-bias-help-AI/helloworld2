@@ -31,3 +31,15 @@ def test_n3_corrective_prompt_does_not_hard_code_failure_category():
     prompt = system_for("n3/v2/corrective")
     assert "실패 category는 incompatible_slot_kind다" not in prompt
     assert "correction" in prompt
+
+
+def test_n5_n7_n8_prompts_preserve_grounding_and_direct_contradiction_rules():
+    n5 = system_for("n5/v1")
+    n7 = system_for("n7/v1")
+    n8 = system_for("n8/v1")
+
+    assert "PRICE_MOVEMENT" in n5
+    assert "comparison_target" in n5
+    assert "검색 intent가 counter라는 이유만으로" in n7
+    assert "동일 대상·동일 지표·비교 가능한 기간" in n8
+    assert "support가 없다는 이유만으로 contradicted" in n8

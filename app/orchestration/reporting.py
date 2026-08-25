@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from app.contexts.views import RenderCitationView
-from app.orchestration.drafts import RenderDraft
+from app.orchestration.drafts import RenderDraft, RenderedSlotDraft
 from app.schemas.frozen import CitationRef, NonBlankStr, SlotId, TheoryNote, Violation
 
 
@@ -40,6 +40,30 @@ def deduplicate_citations(citations: list[CitationRef]) -> list[CitationRef]:
         seen.add(key)
         result.append(citation)
     return result
+
+
+def coalesce_rendered_slots(slots: list[RenderedSlotDraft]) -> list[RenderedSlotArtifact]:
+    """Normalize duplicate slot numbers without dropping text or citations."""
+    first_by_slot: dict[int, RenderedSlotDraft] = {}
+    text_by_slot: dict[int, list[str]] = {}
+    citations_by_slot: dict[int, list[CitationRef]] = {}
+    for item in slots:
+        if item.slot_no not in first_by_slot:
+            first_by_slot[item.slot_no] = item
+            text_by_slot[item.slot_no] = [item.text]
+            citations_by_slot[item.slot_no] = []
+        elif item.text not in text_by_slot[item.slot_no]:
+            text_by_slot[item.slot_no].append(item.text)
+        citations_by_slot[item.slot_no].extend(item.citations)
+
+    return [
+        RenderedSlotArtifact(
+            slot_no=slot_no,
+            text=" ".join(text_by_slot[slot_no]),
+            citations=deduplicate_citations(citations_by_slot[slot_no]),
+        )
+        for slot_no in first_by_slot
+    ]
 
 
 class RenderCandidate(_Artifact):
@@ -86,14 +110,7 @@ def build_report_artifact(
     citation_views: dict[str, RenderCitationView],
     created_at: datetime,
 ) -> ReportArtifact:
-    slots = [
-        RenderedSlotArtifact(
-            slot_no=item.slot_no,
-            text=item.text,
-            citations=deduplicate_citations(item.citations),
-        )
-        for item in draft.slots
-    ]
+    slots = coalesce_rendered_slots(draft.slots)
     keys = sorted({citation.evidence_id for item in slots for citation in item.citations})
     return ReportArtifact(
         rendered_slots=slots,

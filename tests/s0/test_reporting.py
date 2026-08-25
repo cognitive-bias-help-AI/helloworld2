@@ -102,6 +102,43 @@ def test_report_artifact_keeps_top_level_citation_index_unique():
     assert len(artifact.citations) == 1
 
 
+def test_report_artifact_coalesces_duplicate_slot_numbers_without_dropping_text():
+    first = CitationRef(evidence_id=EID, span="첫 번째")
+    second = CitationRef(evidence_id=EID, span="두 번째")
+    draft = RenderDraft(
+        slots=[
+            RenderedSlotDraft(slot_no=4, text="A", citations=[first]),
+            RenderedSlotDraft(slot_no=4, text="B", citations=[second]),
+        ]
+    )
+    views = {EID: RenderCitationView(evidence_id=EID, span="문장", source_url="https://example.com", publisher="p")}
+
+    artifact = build_report_artifact(
+        draft, banners=[], theory_notes=[], citation_views=views, created_at=NOW
+    )
+
+    assert [item.slot_no for item in artifact.rendered_slots] == [4]
+    assert artifact.rendered_slots[0].text == "A B"
+    assert artifact.rendered_slots[0].citations == [first, second]
+
+
+def test_report_artifact_keeps_exact_duplicate_slot_text_once():
+    draft = RenderDraft(
+        slots=[
+            RenderedSlotDraft(slot_no=4, text="A", citations=[citation()]),
+            RenderedSlotDraft(slot_no=4, text="A", citations=[citation()]),
+        ]
+    )
+    views = {EID: RenderCitationView(evidence_id=EID, span="문장", source_url="https://example.com", publisher="p")}
+
+    artifact = build_report_artifact(
+        draft, banners=[], theory_notes=[], citation_views=views, created_at=NOW
+    )
+
+    assert len(artifact.rendered_slots) == 1
+    assert artifact.rendered_slots[0].text == "A"
+
+
 def test_ui_projection_preserves_the_deduplicated_canonical_slot():
     draft = RenderDraft(
         slots=[RenderedSlotDraft(slot_no=1, text="A", citations=[citation(), citation()])]

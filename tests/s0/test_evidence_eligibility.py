@@ -80,17 +80,18 @@ def query(n: int, claim_id: str, *, provider: str = "dart") -> Query:
     )
 
 
-def evidence(n: int) -> Evidence:
+def evidence(n: int, *, normalized_value=None, source_type="dart", raw_span=None) -> Evidence:
     return Evidence(
         evidence_id=uid(7000 + n),
-        source_type="dart",
+        source_type=source_type,
         source_ref=f"ref-{n}",
         fetched_at=NOW,
-        raw_span=f"evidence-{n}",
+        raw_span=raw_span or f"evidence-{n}",
         span_scope="structured_field",
         content_sha256=f"{n:064x}",
         provider_request_id=uid(6000 + n),
         as_of=NOW,
+        normalized_value=normalized_value,
     )
 
 
@@ -470,6 +471,107 @@ async def test_n7_calls_llm_only_for_evidenced_claims_and_preserves_query_lineag
     assert (await runtime_deps.review_store.get_claim_evidence("run-s0", a.claim_id))[0].query_id == qa.query_id
     assert await runtime_deps.review_store.get_claim_evidence("run-s0", b.claim_id) == []
     assert (await runtime_deps.review_store.get_claim_evidence("run-s0", c.claim_id))[0].query_id == qc.query_id
+
+
+@pytest.mark.asyncio
+async def test_structured_decrease_for_increase_claim_reaches_n7_oppose_and_n8_contradicted():
+    runtime_deps = deps()
+    item = claim(1, verifiable=True, proposition="회사 A 영업이익이 증가했다")
+    state = await seed_claims(runtime_deps, [item])
+    q = query(1, item.claim_id)
+    structured = evidence(
+        1,
+        raw_span="영업이익 당기 80 / 전기 100",
+        normalized_value={
+            "kind": "financial_statement",
+            "account_name": "영업이익",
+            "comparison_available": True,
+            "current_value": 80,
+            "prior_value": 100,
+            "change_direction": "decrease",
+            "comparison_basis": "ANNUAL",
+        },
+    )
+    state["query_ids"] = await seed_queries_and_evidence(
+        runtime_deps, [(item, q, structured)]
+    )
+
+    n7_patch = await make_nodes(runtime_deps)["n7"](state)
+    links = await runtime_deps.review_store.get_claim_evidence("run-s0", item.claim_id)
+    assert links[0].stance == "oppose"
+    assert links[0].stance_source == "rule"
+
+    n8_patch = await make_nodes(runtime_deps)["n8"](state | n7_patch)
+    evaluations = await runtime_deps.review_store.get_claim_evaluations(
+        n8_patch["claim_evaluation_ids"]
+    )
+    assert evaluations[0].oppose_evidence_ids == [structured.evidence_id]
+    assert evaluations[0].verdict == "contradicted"
+
+
+@pytest.mark.asyncio
+async def test_structured_increase_for_increase_claim_is_rule_support_not_contradicted():
+    runtime_deps = deps()
+    item = claim(1, verifiable=True, proposition="회사 B 영업이익이 증가했다")
+    state = await seed_claims(runtime_deps, [item])
+    structured = evidence(
+        1,
+        normalized_value={
+            "kind": "financial_statement",
+            "account_name": "영업이익",
+            "comparison_available": True,
+            "current_value": 120,
+            "prior_value": 100,
+            "change_direction": "increase",
+        },
+    )
+    state["query_ids"] = await seed_queries_and_evidence(
+        runtime_deps, [(item, query(1, item.claim_id), structured)]
+    )
+
+    n7_patch = await make_nodes(runtime_deps)["n7"](state)
+    links = await runtime_deps.review_store.get_claim_evidence("run-s0", item.claim_id)
+    assert (links[0].stance, links[0].stance_source) == ("support", "rule")
+
+    n8_patch = await make_nodes(runtime_deps)["n8"](state | n7_patch)
+    evaluation = (await runtime_deps.review_store.get_claim_evaluations(
+        n8_patch["claim_evaluation_ids"]
+    ))[0]
+    assert evaluation.verdict != "contradicted"
+
+
+def test_structured_direction_rule_is_fail_closed_for_uncomparable_or_unrelated_evidence():
+    increasing_claim = claim(1, verifiable=True, proposition="회사 A 영업이익이 증가했다")
+    negated_claim = claim(2, verifiable=True, proposition="회사 A 영업이익이 증가하지 않았다")
+    unavailable = evidence(
+        1,
+        normalized_value={
+            "kind": "financial_statement",
+            "account_name": "영업이익",
+            "comparison_available": False,
+            "change_direction": None,
+        },
+    )
+    competitor = evidence(
+        3,
+        source_type="news",
+        normalized_value={"kind": "news"},
+        raw_span="회사 B가 시장 우위를 유지한다",
+    )
+    supporting = evidence(
+        4,
+        normalized_value={
+            "kind": "financial_statement",
+            "account_name": "영업이익",
+            "comparison_available": True,
+            "change_direction": "increase",
+        },
+    )
+
+    assert nodes_module._structured_change_stance(increasing_claim, unavailable) is None
+    assert nodes_module._structured_change_stance(increasing_claim, competitor) is None
+    assert nodes_module._structured_change_stance(increasing_claim, supporting) == "support"
+    assert nodes_module._structured_change_stance(negated_claim, supporting) is None
 
 
 @pytest.mark.asyncio

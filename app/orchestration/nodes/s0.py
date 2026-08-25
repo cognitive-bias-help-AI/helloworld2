@@ -78,6 +78,7 @@ from app.orchestration.judgment_review import (
     build_missing_slot_views,
     build_review_slot_views,
     build_slot_projection_review_views,
+    coalesce_slot_text_views,
 )
 from app.orchestration.limits import (
     EXTERNAL_CALL_LIMIT,
@@ -92,9 +93,11 @@ from app.orchestration.validators.citations import validate_citations
 from app.schemas.frozen import (
     PROVIDER_SOURCE_TYPE,
     CitationRef,
+    Claim,
     ClaimEvaluationDraft,
     ClaimStanceDraft,
     CollectionResult,
+    Evidence,
     GuardInput,
     NodeStatus,
     Query,
@@ -102,6 +105,59 @@ from app.schemas.frozen import (
     SourceTrace,
     StockCandidate,
 )
+
+_INCREASE_TERMS = ("증가", "상승", "오름", "늘", "개선", "increase", "increased", "rise", "rising", "up")
+_DECREASE_TERMS = ("감소", "하락", "내림", "줄", "악화", "decrease", "decreased", "fall", "falling", "down")
+_NEGATION_TERMS = ("않", "안 ", "못", "없", "not", "never", "didn't", "doesn't")
+
+
+def _claim_direction(claim: Claim) -> str | None:
+    text = claim.normalized_proposition.casefold()
+    if any(term in text for term in _NEGATION_TERMS):
+        return None
+    increased = any(term.casefold() in text for term in _INCREASE_TERMS)
+    decreased = any(term.casefold() in text for term in _DECREASE_TERMS)
+    if increased == decreased:
+        return None
+    return "increase" if increased else "decrease"
+
+
+def _structured_change_stance(claim: Claim, evidence: Evidence) -> str | None:
+    """Return a stance only for directly comparable financial evidence."""
+    value = evidence.normalized_value
+    if not isinstance(value, dict) or value.get("kind") != "financial_statement":
+        return None
+    if value.get("comparison_available") is not True:
+        return None
+    account_name = value.get("account_name")
+    evidence_direction = value.get("change_direction")
+    if not isinstance(account_name, str) or account_name not in claim.normalized_proposition:
+        return None
+    if evidence_direction not in {"increase", "decrease", "unchanged"}:
+        return None
+    claim_direction = _claim_direction(claim)
+    if claim_direction is None:
+        return None
+    if evidence_direction == "unchanged":
+        return "oppose"
+    return "support" if claim_direction == evidence_direction else "oppose"
+
+
+def _apply_structured_stance_overrides(
+    items: list,
+    claim: Claim,
+    evidence_by_id: dict[str, Evidence],
+) -> list:
+    return [
+        item.model_copy(
+            update={"stance": structured_stance, "stance_source": "rule"}
+        )
+        if (structured_stance := _structured_change_stance(
+            claim, evidence_by_id[item.evidence_id]
+        )) is not None
+        else item
+        for item in items
+    ]
 
 
 def _sanitize_intake(intake: HybridIntake) -> HybridIntake:
@@ -824,6 +880,9 @@ def make_nodes(deps: RuntimeDeps):
                     claim.claim_id, evidence_ids, mapping
                 )
                 degraded = True
+            draft = _apply_structured_stance_overrides(
+                draft, claim, {item.evidence_id: item for item in evidence}
+            )
             await deps.review_store.put_claim_evidence(state["run_id"], draft)
         patch = {
             "node_results": ["n7:partial" if degraded else "n7:ok"],
@@ -912,23 +971,79 @@ def make_nodes(deps: RuntimeDeps):
             evidence_ids = [item.evidence_id for item in evidence]
             view = _packet(evidence)
             assembled = None
-            for _ in range(2):
-                candidate, _ = await _invoke(deps, "n8", "LARGE", view, ClaimEvaluationDraft)
-                llm_calls += 1
-                try:
-                    assembled = assemble_claim_evaluation(
-                        candidate,
-                        claim.claim_id,
-                        evidence_ids,
-                        [],
-                        deps.id_factory(),
-                        deps.clock(),
-                        primary_evidence_ids=set(evidence_ids) & all_primary_evidence_ids,
-                    )
-                    break
-                except AssemblyError as exc:
-                    if not exc.retryable:
-                        raise
+            links_by_evidence = {item.evidence_id: item for item in links}
+            rule_primary_oppose = {
+                item.evidence_id
+                for item in evidence
+                if item.evidence_id in all_primary_evidence_ids
+                and links_by_evidence[item.evidence_id].stance_source == "rule"
+                and links_by_evidence[item.evidence_id].stance == "oppose"
+            }
+            rule_primary_support = {
+                item.evidence_id
+                for item in evidence
+                if item.evidence_id in all_primary_evidence_ids
+                and links_by_evidence[item.evidence_id].stance_source == "rule"
+                and links_by_evidence[item.evidence_id].stance == "support"
+            }
+            if rule_primary_oppose and not rule_primary_support:
+                deterministic_draft = ClaimEvaluationDraft(
+                    citations=[
+                        CitationRef(evidence_id=item.evidence_id, span=item.raw_span)
+                        for item in evidence
+                        if item.evidence_id in rule_primary_oppose
+                    ],
+                    support_evidence_ids=[
+                        item.evidence_id
+                        for item in evidence
+                        if links_by_evidence[item.evidence_id].stance == "support"
+                    ],
+                    oppose_evidence_ids=[
+                        item.evidence_id
+                        for item in evidence
+                        if links_by_evidence[item.evidence_id].stance == "oppose"
+                    ],
+                    neutral_evidence_ids=[
+                        item.evidence_id
+                        for item in evidence
+                        if links_by_evidence[item.evidence_id].stance == "neutral"
+                    ],
+                    unknown_evidence_ids=[
+                        item.evidence_id
+                        for item in evidence
+                        if links_by_evidence[item.evidence_id].stance == "unknown"
+                    ],
+                    verdict="contradicted",
+                    missing_dimensions=[],
+                    uncertainty_codes=[],
+                )
+                assembled = assemble_claim_evaluation(
+                    deterministic_draft,
+                    claim.claim_id,
+                    evidence_ids,
+                    [],
+                    deps.id_factory(),
+                    deps.clock(),
+                    primary_evidence_ids=set(evidence_ids) & all_primary_evidence_ids,
+                )
+            else:
+                for _ in range(2):
+                    candidate, _ = await _invoke(deps, "n8", "LARGE", view, ClaimEvaluationDraft)
+                    llm_calls += 1
+                    try:
+                        assembled = assemble_claim_evaluation(
+                            candidate,
+                            claim.claim_id,
+                            evidence_ids,
+                            [],
+                            deps.id_factory(),
+                            deps.clock(),
+                            primary_evidence_ids=set(evidence_ids) & all_primary_evidence_ids,
+                        )
+                        break
+                    except AssemblyError as exc:
+                        if not exc.retryable:
+                            raise
             if assembled is None:
                 assembled = assemble_unverifiable_evaluation_fallback(
                     claim_id=claim.claim_id,
@@ -1192,6 +1307,7 @@ def make_nodes(deps: RuntimeDeps):
             *build_review_slot_views(findings, evaluations),
             *build_slot_projection_review_views(projections),
         ]
+        review_slots = coalesce_slot_text_views(review_slots)
         # 🔴 n11 도 예산을 넘는다. citations 는 Evidence 전량이고 raw_span 이
         #    최대 500자라, 근거 8건이면 n11 상한(3,500자)을 넘긴다.
         #    slots 도 finding 수만큼 늘어나 item 상한(8)을 넘길 수 있다.

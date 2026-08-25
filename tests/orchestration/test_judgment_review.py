@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+import app.orchestration.judgment_review as judgment_review
 from app.domain.intake import ResponseState
 from app.domain.slot_resolution import CurrentSlotProjection, CurrentSlotStatus
 from app.orchestration.judgment_review import (
@@ -207,3 +208,50 @@ def test_slot8_conflict_and_ambiguity_have_distinct_ephemeral_render_views():
     assert "의미가 명확하지 않아" in ambiguous[0].text
     assert conflict[0].citations == ambiguous[0].citations == []
     assert absent == []
+
+
+def test_two_findings_for_one_slot_are_coalesced_for_n11_input():
+    findings = [
+        Finding(
+            finding_id=uid(30),
+            slot_id=4,
+            kind="unverified",
+            citations=[CitationRef(evidence_id=uid(40), span="E1")],
+            claim_evaluation_id=None,
+            created_at=NOW,
+        ),
+        Finding(
+            finding_id=uid(31),
+            slot_id=4,
+            kind="unverified",
+            citations=[CitationRef(evidence_id=uid(41), span="E2")],
+            claim_evaluation_id=None,
+            created_at=NOW,
+        ),
+    ]
+
+    views = build_review_slot_views(findings, [])
+    coalesced = judgment_review.coalesce_slot_text_views(views)
+
+    assert [item.slot_no for item in views] == [4, 4]
+    assert [item.slot_no for item in coalesced] == [4]
+    assert coalesced[0].text.count("확인되지 않았습니다") == 1
+    assert [item.evidence_id for item in coalesced[0].citations] == [uid(40), uid(41)]
+
+
+def test_slot_text_coalescing_preserves_order_and_deduplicates_text_and_citations():
+    citation_a = CitationRef(evidence_id=uid(40), span="E1")
+    citation_b = CitationRef(evidence_id=uid(41), span="E2")
+    views = [
+        judgment_review.SlotTextView(slot_no=4, text="A", quoted=False, citations=[citation_a]),
+        judgment_review.SlotTextView(slot_no=4, text="A", quoted=False, citations=[citation_a]),
+        judgment_review.SlotTextView(slot_no=7, text="C", quoted=False, citations=[]),
+        judgment_review.SlotTextView(slot_no=4, text="B", quoted=False, citations=[citation_b]),
+    ]
+
+    result = judgment_review.coalesce_slot_text_views(views)
+
+    assert [item.slot_no for item in result] == [4, 7]
+    assert result[0].text == "A B"
+    assert result[0].citations == [citation_a, citation_b]
+    assert result[1].text == "C"

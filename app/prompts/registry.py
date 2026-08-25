@@ -216,6 +216,12 @@ Claim 하나와 그에 연결된 Evidence 목록이 주어진다.
 
 - **검색 의도와 근거의 의미는 다르다.** 반대 근거를 찾으려고 검색한 결과라도
   실제 내용이 주장을 뒷받침하면 support 다. 그 반대도 마찬가지다.
+- oppose 는 부정적 분위기, 투자 위험, 경쟁사 강세가 아니라 Claim의 핵심
+  proposition과 직접 양립하기 어려운 Evidence에만 사용한다. 두 문장이 동시에
+  참일 수 있으면 oppose가 아니라 neutral 또는 unknown이다.
+- 구조화된 값과 change direction이 있고 동일 대상·동일 지표·비교 가능한 기간이면
+  일반 기사 표현보다 그 관측을 우선한다. 검색 intent가 counter라는 이유만으로
+  oppose를 부여하지 않는다.
 - 근거는 제목과 요약만 주어질 수 있다. 본문을 상상해서 채우지 않는다.
   제목·요약으로 방향이 안 잡히면 unknown 이다.
 - 주장과 다른 회사·다른 사안을 다루는 근거는 unknown 이다.
@@ -251,6 +257,11 @@ support / oppose / neutral / unknown 네 목록에 **입력 Evidence 를 빠짐�
 Evidence 가 없거나 전부 unknown 이면 unverifiable 이다.
 support 와 oppose 가 함께 있으면 어느 쪽이 더 직접적인지 보고
 partial_support 또는 contradicted 를 고른다.
+동일 대상·동일 지표·비교 가능한 기간의 직접 반박 Evidence가 있고, 특히
+구조화된 PRIMARY 관측이 반대 방향이면 contradicted를 허용한다. 반대로
+경쟁사 강세나 일반 위험처럼 Claim과 공존할 수 있는 내용만 있으면
+contradicted로 올리지 않는다. support가 없다는 이유만으로 contradicted를
+선택하지 않는다.
 **애매하면 더 약한 판정을 고른다.** 과장은 이 시스템에서 가장 큰 오류다.
 
 ■ citations
@@ -366,6 +377,17 @@ _N5: Final = """\
 Return zero to three categories from the supplied fixed taxonomy. Use only information
 grounded in the Claim. An empty requirements list is valid and uncertainty means fewer
 requirements.
+
+Select the category that matches the Claim's asserted fact (for example, a claim about
+price direction uses PRICE_MOVEMENT and a claim about operating profit uses
+FINANCIAL_PERFORMANCE). Use COMPETITIVE_POSITION for a company's or product's
+competitive position, DEMAND_SUPPLY for demand or supply conditions, and
+INDUSTRY_CONDITION for industry-level conditions. When useful for retrieval, structure only dimensions that are
+explicitly present in the Claim: copy topic terms, direction, actor,
+comparison_target, and temporal_expression from the Claim. These fields describe what
+must be checked; they are not permission to invent a comparison or an opposing fact.
+Preserve the Claim's direction (increase/decrease or equivalent wording) when it is
+explicit. If a dimension is absent or ambiguous, leave it empty.
 
 Never output provider names, endpoints, API parameters, credentials, stock codes not
 supplied, invented years, companies, competitors, financial values, policies, or facts.

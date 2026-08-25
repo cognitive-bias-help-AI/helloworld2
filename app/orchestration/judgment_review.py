@@ -152,6 +152,42 @@ def build_review_slot_views(
     return views
 
 
+def coalesce_slot_text_views(views: Iterable[SlotTextView]) -> list[SlotTextView]:
+    """Coalesce review text by slot while preserving first-seen order."""
+    grouped: dict[int, SlotTextView] = {}
+    text_by_slot: dict[int, list[str]] = {}
+    citation_keys_by_slot: dict[int, set[tuple[str, str]]] = {}
+
+    for view in views:
+        slot_no = view.slot_no
+        if slot_no not in grouped:
+            grouped[slot_no] = SlotTextView(
+                slot_no=slot_no,
+                text=view.text,
+                quoted=view.quoted,
+                citations=[],
+            )
+            text_by_slot[slot_no] = [view.text]
+            citation_keys_by_slot[slot_no] = set()
+        else:
+            if view.text not in text_by_slot[slot_no]:
+                text_by_slot[slot_no].append(view.text)
+
+        citations = grouped[slot_no].citations
+        seen = citation_keys_by_slot[slot_no]
+        for citation in view.citations:
+            key = (citation.evidence_id, citation.span)
+            if key in seen:
+                continue
+            seen.add(key)
+            citations.append(citation)
+
+    return [
+        grouped[slot_no].model_copy(update={"text": " ".join(text_by_slot[slot_no])})
+        for slot_no in grouped
+    ]
+
+
 def build_slot_projection_review_views(
     projections: Iterable[CurrentSlotProjection],
 ) -> list[SlotTextView]:
