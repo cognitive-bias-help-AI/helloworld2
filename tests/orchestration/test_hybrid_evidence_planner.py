@@ -203,6 +203,23 @@ def test_claim_specific_dart_disclosure_reuses_baseline_retrieval_policy():
     assert resolution.planned == (("dart", "disclosure_list", baseline.params),)
 
 
+def test_claim_specific_naver_query_uses_claim_text_when_topic_terms_are_empty():
+    result = plan_hybrid_claim(
+        claim("테스트기업의 사업 전략이 확대되고 있다"),
+        intent(EvidenceCategory.BUSINESS_STRATEGY),
+        stock_code="123456",
+        stock_name="테스트기업",
+        as_of=NOW,
+        id_factory=iter([uid(19)]).__next__,
+        clock=lambda: NOW,
+    )
+
+    query = result.queries[0]
+    assert query.provider == "naver"
+    assert query.params["query"] != "테스트기업"
+    assert "사업 전략" in query.params["query"]
+
+
 def test_financial_requirement_plans_primary_and_corroborative_without_inventing_policy_facts():
     result = plan_hybrid_claim(
         claim("2025년 영업이익이 증가했다"),

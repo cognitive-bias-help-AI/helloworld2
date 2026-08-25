@@ -219,6 +219,20 @@ def _indicator_family(text: str) -> tuple[str | None, bool]:
     return _single(text, _INDICATOR_FAMILY_BY_TERM)
 
 
+def _claim_grounded_topic(stock_name: str, text: str) -> str:
+    """Use Claim text when N5 supplied no narrower topic terms."""
+
+    name = stock_name.strip()
+    claim_text = text.strip()
+    if claim_text.startswith(name):
+        claim_text = claim_text[len(name):].lstrip()
+        for particle in ("은", "는", "이", "가", "의", "을", "를", "에", "에서"):
+            if claim_text.startswith(particle):
+                claim_text = claim_text[len(particle):].lstrip()
+                break
+    return " ".join(part for part in (name, claim_text) if part).strip()
+
+
 def resolve_parameters(
     need: EvidenceNeed,
     text: str,
@@ -480,7 +494,11 @@ def _resolution_for_source(
     topic_terms: list[str],
 ) -> ParameterResolution:
     if source.provider == "naver":
-        topic = " ".join([stock_name, *topic_terms]).strip()
+        topic = (
+            " ".join([stock_name, *topic_terms]).strip()
+            if topic_terms
+            else _claim_grounded_topic(stock_name, text)
+        )
         return ParameterResolution(
             planned=((
                 "naver",

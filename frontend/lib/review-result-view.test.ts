@@ -153,6 +153,73 @@ test("evidence keeps canonical roles and all four stances with only safe source 
   assert.equal(buildReviewResultView(unsafe).evidence[0].safeUrl, null);
 });
 
+test("evidence groups preserve source boundaries for provider toggles", () => {
+  const result = resultFixture();
+  result.evidence.push(
+    { ...result.evidence[0], evidenceId: "news-evidence", sourceType: "news", publisher: "NAVER", source: "NAVER" },
+    { ...result.evidence[0], evidenceId: "quote-evidence", sourceType: "quote", publisher: "Kiwoom", source: "Kiwoom" },
+  );
+  result.providerCollections = {
+    news: { source: "news", status: "OK", reasonCode: null, itemsFetched: 1, itemsAdopted: 1, itemsDeduped: 0, queriesRun: 1 },
+    dart: { source: "dart", status: "PARTIAL", reasonCode: "coverage_truncated", itemsFetched: 2, itemsAdopted: 1, itemsDeduped: 1, queriesRun: 1 },
+    quote: { source: "quote", status: "OK", reasonCode: null, itemsFetched: 1, itemsAdopted: 1, itemsDeduped: 0, queriesRun: 1 },
+  };
+
+  const view = buildReviewResultView(result);
+  assert.deepEqual(view.evidenceGroups.map((group) => ({
+    sourceType: group.sourceType,
+    label: group.label,
+    itemCount: group.items.length,
+    statusLabel: group.statusLabel,
+  })), [
+    { sourceType: "news", label: "검색", itemCount: 1, statusLabel: "자료 수집 완료" },
+    { sourceType: "dart", label: "DART", itemCount: 1, statusLabel: "일부 자료만 수집됨" },
+    { sourceType: "quote", label: "Kiwoom", itemCount: 1, statusLabel: "자료 수집 완료" },
+  ]);
+  assert.equal(view.evidenceGroups[0].items[0].evidenceId, "news-evidence");
+  assert.equal(view.evidenceGroups[1].items[0].evidenceId, "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+  assert.equal(view.evidenceGroups[2].items[0].evidenceId, "quote-evidence");
+});
+
+test("claim evidence and stock context remain separate in result projection", () => {
+  const result = resultFixture();
+  result.evidence.push({
+    ...result.evidence[0],
+    evidenceId: "stock-context-evidence",
+    relatedQueryIds: ["baseline-query"],
+    relatedClaimIds: [],
+    roles: [],
+    stances: [],
+  });
+
+  const view = buildReviewResultView(result);
+  assert.deepEqual(view.claimEvidence.map((item) => item.evidenceId), ["01ARZ3NDEKTSV4RRFFQ69G5FAV"]);
+  assert.deepEqual(view.contextEvidence.map((item) => item.evidenceId), ["stock-context-evidence"]);
+});
+
+test("source-limited claim keeps canonical support and oppose direction counts", () => {
+  const result = resultFixture();
+  const opposeEvidenceId = "corroborative-oppose-evidence";
+  result.evidence[0].roles = ["CORROBORATIVE"];
+  result.claims[0].evaluation!.verdict = "unverifiable";
+  result.claims[0].evaluation!.supportEvidenceIds = [result.evidence[0].evidenceId];
+  result.claims[0].evaluation!.opposeEvidenceIds = [opposeEvidenceId];
+  result.evidence.push({
+    ...result.evidence[0],
+    evidenceId: opposeEvidenceId,
+    relatedClaimIds: ["claim-0"],
+    stances: [{ claimId: "claim-0", stance: "oppose", stanceSource: "llm", queryId: "query-2" }],
+  });
+
+  const claim = buildReviewResultView(result).claims[0];
+  assert.equal(claim.evaluation?.verdict, "unverifiable");
+  assert.equal(claim.limitationKind, "source_limited");
+  assert.deepEqual(claim.stanceSummary, [
+    { key: "support", label: "뒷받침 방향", count: 1 },
+    { key: "oppose", label: "반대 방향", count: 1 },
+  ]);
+});
+
 test("numeric, findings, uncertainty and provider limitations are exposed only from canonical data", () => {
   const view = buildReviewResultView(resultFixture());
   assert.equal(view.numericChecks.length, 1);

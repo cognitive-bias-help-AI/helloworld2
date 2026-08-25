@@ -10,6 +10,37 @@ function dateLabel(value: string | null) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("ko-KR");
 }
 
+type EvidenceItemView = ReturnType<typeof buildReviewResultView>["evidence"][number];
+
+function EvidenceCard({ item }: { item: EvidenceItemView }) {
+  return <article className="evidence-card" id={`evidence-${item.evidenceId}`}>
+    <div className="evidence-meta"><strong>{item.publisher || sourceLabels[item.sourceType] || item.source}</strong>{dateLabel(item.publishedAt) && <span>{dateLabel(item.publishedAt)}</span>}</div>
+    <div className="tag-row">{item.roleLabels.map((label) => <span className="role-tag" key={label}>{label}</span>)}{item.stances.map((stance, index) => <span className={`stance-tag stance-${stance.stance}`} key={`${stance.claimId}-${index}`}>{stance.label}</span>)}</div>
+    <blockquote>{item.rawSpan || item.excerpt}</blockquote>
+    {item.safeUrl && <a className="source-link" href={item.safeUrl} target="_blank" rel="noopener noreferrer">원문 자료 열기</a>}
+    <details><summary>근거 계보 보기</summary><p>Evidence ID: <code>{item.evidenceId}</code></p><p>관련 Claim: {item.relatedClaimIds.join(", ") || "없음"}</p><p>관련 Query: {item.relatedQueryIds.join(", ") || "없음"}</p></details>
+  </article>;
+}
+
+type EvidenceGroupView = ReturnType<typeof buildReviewResultView>["evidenceGroups"][number];
+
+function EvidenceSourceToggles({ groups, emptyMessage }: { groups: EvidenceGroupView[]; emptyMessage: string }) {
+  return <div className="evidence-source-list">
+    {groups.map((group) => <details className="evidence-source-toggle" key={group.sourceType}>
+      <summary>
+        <span className="evidence-toggle-title"><strong>{group.label}</strong><small>{group.description}</small></span>
+        <span className="evidence-toggle-meta"><b>{group.items.length}건</b><em>{group.statusLabel}</em></span>
+      </summary>
+      <div className="evidence-source-body">
+        {group.reasonLabel && <p className="evidence-source-reason">{group.reasonLabel}</p>}
+        {group.items.length > 0
+          ? group.items.map((item) => <EvidenceCard item={item} key={item.evidenceId} />)
+          : <p className="empty-note">{emptyMessage}</p>}
+      </div>
+    </details>)}
+  </div>;
+}
+
 export function ReviewResult({ result }: { result: ReviewResultData }) {
   const view = buildReviewResultView(result);
 
@@ -47,6 +78,7 @@ export function ReviewResult({ result }: { result: ReviewResultData }) {
           {claim.evaluation && <>
             {claim.missingDimensionLabels.length > 0 && <div className="detail-block"><strong>추가 확인이 필요한 정보</strong><ul>{claim.missingDimensionLabels.map((slot) => <li key={slot}>{slot}</li>)}</ul></div>}
             {claim.limitationLabel && <div className="detail-block"><strong>검토 범위</strong><p>{claim.limitationLabel}</p></div>}
+            {claim.stanceSummary.length > 0 && <div className="detail-block"><strong>{claim.limitationKind === "source_limited" ? "참고자료 방향" : "근거 방향"}</strong><ul>{claim.stanceSummary.map((item) => <li key={item.key}>{item.label} {item.count}건</li>)}</ul></div>}
             {claim.uncertaintyLabels.length > 0 && <div className="detail-block"><strong>불확실성</strong><ul>{claim.uncertaintyLabels.map((label, index) => <li key={`${label}-${index}`}>{label} <code>{claim.evaluation!.uncertaintyCodes[index]}</code></li>)}</ul></div>}
             {claim.bucketEvidence && Object.entries(claim.bucketEvidence).map(([bucket, items]) => items.length > 0 && <div className="detail-block" key={bucket}><strong>{bucketLabels[bucket as keyof typeof bucketLabels]}</strong><ul>{items.map((item) => item && <li key={item.evidenceId}><a href={`#evidence-${item.evidenceId}`}>{item.publisher || sourceLabels[item.sourceType] || item.source}</a></li>)}</ul></div>)}
           </>}
@@ -56,13 +88,19 @@ export function ReviewResult({ result }: { result: ReviewResultData }) {
 
     <section className="card" aria-labelledby="evidence-title">
       <h2 id="evidence-title">확인한 근거</h2>
-      {view.evidence.length ? view.evidence.map((item) => <article className="evidence-card" id={`evidence-${item.evidenceId}`} key={item.evidenceId}>
-        <div className="evidence-meta"><strong>{item.publisher || sourceLabels[item.sourceType] || item.source}</strong>{dateLabel(item.publishedAt) && <span>{dateLabel(item.publishedAt)}</span>}</div>
-        <div className="tag-row">{item.roleLabels.map((label) => <span className="role-tag" key={label}>{label}</span>)}{item.stances.map((stance, index) => <span className={`stance-tag stance-${stance.stance}`} key={`${stance.claimId}-${index}`}>{stance.label}</span>)}</div>
-        <blockquote>{item.rawSpan || item.excerpt}</blockquote>
-        {item.safeUrl && <a className="source-link" href={item.safeUrl} target="_blank" rel="noopener noreferrer">원문 자료 열기</a>}
-        <details><summary>근거 계보 보기</summary><p>Evidence ID: <code>{item.evidenceId}</code></p><p>관련 Claim: {item.relatedClaimIds.join(", ") || "없음"}</p><p>관련 Query: {item.relatedQueryIds.join(", ") || "없음"}</p></details>
-      </article>) : <p className="empty-note">이번 검토에서 표시할 외부 근거가 없습니다. 이는 사용자 판단이 틀렸다는 의미가 아닙니다.</p>}
+      <p className="evidence-intro">자료원을 나누어 확인할 수 있습니다. 근거의 역할과 판단 연결은 원문 그대로 유지됩니다.</p>
+      <div className="evidence-layer-list">
+        <section className="evidence-layer" aria-labelledby="claim-evidence-title">
+          <h3 id="claim-evidence-title">판단 검증 근거</h3>
+          <p>내 Claim과 직접 연결된 자료입니다.</p>
+          <EvidenceSourceToggles groups={view.claimEvidenceGroups} emptyMessage="Claim과 직접 연결된 근거가 없습니다." />
+        </section>
+        <section className="evidence-layer" aria-labelledby="context-evidence-title">
+          <h3 id="context-evidence-title">종목 참고 자료</h3>
+          <p>종목 전체 맥락을 보기 위해 별도로 수집한 자료입니다.</p>
+          <EvidenceSourceToggles groups={view.contextEvidenceGroups} emptyMessage="종목 참고 자료가 없습니다." />
+        </section>
+      </div>
     </section>
 
     {view.numericChecks.length > 0 && <section className="card" aria-labelledby="numeric-title"><h2 id="numeric-title">수치 확인</h2><div className="table-scroll"><table><thead><tr><th>지표</th><th>기간</th><th>주장 값</th><th>확인 값</th><th>결과</th></tr></thead><tbody>{view.numericChecks.map((check, index) => <tr key={`${check.claimId}-${index}`}><td>{check.metric}</td><td>{check.period || "-"}</td><td>{check.claimed}</td><td>{check.observed ?? "자료 없음"}{check.observed !== null && check.unit ? ` ${check.unit}` : ""}</td><td>{check.resultLabel}</td></tr>)}</tbody></table></div></section>}

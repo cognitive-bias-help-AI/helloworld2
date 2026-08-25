@@ -174,6 +174,8 @@ def test_검증되지_않은_영문_KRX코드는_Kiwoom_upstream_request로_만�
         (8050, "device_auth", False),
         (8103, "device_auth", True),
         (1700, "rate_limit", True),
+        (1701, "provider_contract", False),
+        (1702, "provider_contract", False),
     ],
 )
 def test_core는_official_return_code_family를_정확히_분류한다(return_code, category, retryable):
@@ -442,8 +444,8 @@ def test_Core_error_category를_Main_ReasonCode로_mapping한다(category, reaso
         (ErrorCategory.INVALID_TOKEN, ReasonCode.AUTH_FAILED),
         (ErrorCategory.MODE_MISMATCH, ReasonCode.AUTH_FAILED),
         (ErrorCategory.DEVICE_AUTH, ReasonCode.AUTH_FAILED),
-        (ErrorCategory.HTTP_CLIENT, ReasonCode.NO_RESULT),
-        (ErrorCategory.PROVIDER, ReasonCode.NO_RESULT),
+        (ErrorCategory.HTTP_CLIENT, ReasonCode.CONTRACT_VIOLATION),
+        (ErrorCategory.PROVIDER, ReasonCode.CONTRACT_VIOLATION),
     ],
 )
 def test_Core의_세부_분류는_가장_덜_오해를_부르는_ReasonCode로_mapping한다(category, reason):

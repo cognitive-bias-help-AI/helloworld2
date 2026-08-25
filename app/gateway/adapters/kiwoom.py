@@ -39,8 +39,8 @@ _ERROR_REASONS = {
     ErrorCategory.PROVIDER_CONTRACT: ReasonCode.CONTRACT_VIOLATION,
     ErrorCategory.NETWORK: ReasonCode.UPSTREAM_TIMEOUT,
     ErrorCategory.HTTP_SERVER: ReasonCode.UPSTREAM_5XX,
-    ErrorCategory.HTTP_CLIENT: ReasonCode.NO_RESULT,
-    ErrorCategory.PROVIDER: ReasonCode.NO_RESULT,
+    ErrorCategory.HTTP_CLIENT: ReasonCode.CONTRACT_VIOLATION,
+    ErrorCategory.PROVIDER: ReasonCode.CONTRACT_VIOLATION,
 }
 
 

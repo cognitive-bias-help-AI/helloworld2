@@ -15,6 +15,7 @@ from app.gateway.adapters.naver import NaverAdapter
 from app.gateway.admission import ProviderAdmissionController
 from app.gateway.evidence_gateway import GatewayResult
 from app.orchestration.drafts import (
+    EvidenceIntentDraft,
     FindingDraft,
     GuardVerdictDraft,
     RenderDraft,
@@ -214,7 +215,7 @@ async def test_n5_claim_dependent_text_slot은_NAVER_Query로_계획한다():
     assert primary_news.params == {
         "stock_code": "005930",
         "stock_name": "삼성전자",
-        "query": "삼성전자",
+        "query": "삼성전자 HBM 공급 확대 뉴스",
         "display": 30,
         "sort": "date",
     }
@@ -911,7 +912,7 @@ async def test_counter_news_network_free_vertical_reaches_verified_oppose_block(
 
         assert n9_patch["oppose"]["status"] == "verified"
         assert n9_patch["oppose"]["count"] == 1
-        assert n9_patch["oppose"]["queries"] == ["삼성전자"]
+        assert n9_patch["oppose"]["queries"] == ["삼성전자 HBM 수요 둔화 뉴스"]
         integration_view = next(
             view for node, view in runtime_deps.model_gateway.calls if node == "n9"
         )
@@ -1020,6 +1021,46 @@ class EmptySafeGateway(FlowGateway):
                 claim_evaluation_id=evaluation_id,
             ), Usage(model_slot=slot, prompt_tokens=0, output_tokens=0, ctx_chars=1)
         return await super().invoke(slot, prompt_version, input_view, output_schema)
+
+
+class EmptyEvidenceIntentGateway(FlowGateway):
+    async def invoke(self, slot, prompt_version, input_view, output_schema):
+        if output_schema is EvidenceIntentDraft:
+            self.calls.append(("n5", input_view))
+            return EvidenceIntentDraft(requirements=[]), Usage(
+                model_slot=slot, prompt_tokens=0, output_tokens=0, ctx_chars=1
+            )
+        return await super().invoke(slot, prompt_version, input_view, output_schema)
+
+
+@pytest.mark.asyncio
+async def test_n5_empty_intent_keeps_deterministic_market_price_floor():
+    runtime_deps = deps(gateway=EmptyEvidenceIntentGateway())
+    item = claim(60, verifiable=True, proposition="최근 주가가 상승했다")
+    state = await seed_claims(runtime_deps, [item])
+
+    patch = await make_nodes(runtime_deps)["n5"](state)
+    queries = await runtime_deps.evidence_store.get_queries(patch["query_ids"])
+
+    claim_queries = [query for query in queries if query.scope == "claim"]
+    assert any(
+        query.provider == "kiwoom"
+        and query.endpoint == "daily_price_history"
+        and query.intent == "verify"
+        for query in claim_queries
+    )
+
+
+@pytest.mark.asyncio
+async def test_n5_empty_intent_unknown_need_does_not_invent_provider_query():
+    runtime_deps = deps(gateway=EmptyEvidenceIntentGateway())
+    item = claim(61, verifiable=True, proposition="사업이 잘 될 것 같다")
+    state = await seed_claims(runtime_deps, [item])
+
+    patch = await make_nodes(runtime_deps)["n5"](state)
+    queries = await runtime_deps.evidence_store.get_queries(patch["query_ids"])
+
+    assert all(query.scope == "stock" for query in queries)
 
 
 @pytest.mark.asyncio

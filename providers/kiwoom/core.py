@@ -144,7 +144,7 @@ _BASE_URLS = {
     Environment.MOCK: "https://mockapi.kiwoom.com",
 }
 _KST = timezone(timedelta(hours=9))
-_RATE_LIMIT_CODES = frozenset({1700, 1701, 1702})
+_RATE_LIMIT_CODES = frozenset({1700})
 _RETRYABLE_AUTH_CODES = frozenset({8005, 8031, 8103})
 _INPUT_VALIDATION_CODES = frozenset({1501, 1504, 1505, 1687, 8020}) | frozenset(range(1511, 1518))
 _SYMBOL_NOT_FOUND_CODES = frozenset({1901, 1902})

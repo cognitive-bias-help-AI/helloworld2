@@ -78,6 +78,25 @@ const PROVIDER_STATUS_LABELS = {
   OK: "자료 수집 완료", PARTIAL: "일부 자료만 수집됨", MISSING: "자료를 수집하지 못함",
 } as const;
 
+const EVIDENCE_GROUPS = [
+  { sourceType: "news", label: "검색", description: "NAVER 뉴스" },
+  { sourceType: "dart", label: "DART", description: "공시·재무" },
+  { sourceType: "quote", label: "Kiwoom", description: "주가 이력" },
+] as const;
+
+const STANCE_SUMMARY = [
+  ["support", "뒷받침 방향", "supportEvidenceIds"],
+  ["oppose", "반대 방향", "opposeEvidenceIds"],
+  ["neutral", "중립 방향", "neutralEvidenceIds"],
+  ["unknown", "판단 어려운 방향", "unknownEvidenceIds"],
+] as const;
+
+type ProviderCollectionProjection = ProviderCollectionView & {
+  key: string;
+  statusLabel: string;
+  reasonLabel: string | null;
+};
+
 const NUMERIC_RESULT_LABELS = {
   consistent: "수치가 일치함", inconsistent: "수치가 일치하지 않음",
   not_comparable: "직접 비교하기 어려움", no_data: "비교할 자료 없음",
@@ -161,6 +180,22 @@ function evidenceView(evidence: EvidenceView) {
   };
 }
 
+function groupEvidence(
+  evidence: ReturnType<typeof evidenceView>[],
+  providerCollections: ProviderCollectionProjection[],
+) {
+  return EVIDENCE_GROUPS.map((group) => {
+    const items = evidence.filter((item) => item.sourceType === group.sourceType);
+    const provider = providerCollections.find((collection) => collection.source === group.sourceType);
+    return {
+      ...group,
+      items,
+      statusLabel: provider?.statusLabel ?? (items.length > 0 ? "자료 수집 완료" : "표시할 자료 없음"),
+      reasonLabel: provider?.reasonLabel ?? null,
+    };
+  });
+}
+
 export function buildReviewResultView(result: ReviewResult) {
   const evidenceById = new Map(result.evidence.map((item) => [item.evidenceId, evidenceView(item)]));
   const evidence = result.evidence.map(evidenceView);
@@ -168,6 +203,11 @@ export function buildReviewResultView(result: ReviewResult) {
     key, ...collection, statusLabel: PROVIDER_STATUS_LABELS[collection.status],
     reasonLabel: collection.reasonCode ? reasonLabel(collection.reasonCode) : null,
   }));
+  const claimEvidence = evidence.filter((item) => item.relatedClaimIds.length > 0);
+  const contextEvidence = evidence.filter((item) => item.relatedClaimIds.length === 0);
+  const evidenceGroups = groupEvidence(evidence, providerCollections);
+  const claimEvidenceGroups = groupEvidence(claimEvidence, providerCollections);
+  const contextEvidenceGroups = groupEvidence(contextEvidence, providerCollections);
   const claims = result.claims.map((claim) => ({
     ...claim,
     limitationKind: claimLimitation(claim, evidence, providerCollections),
@@ -189,6 +229,13 @@ export function buildReviewResultView(result: ReviewResult) {
     missingDimensions: claim.evaluation?.missingDimensions ?? [],
     missingDimensionLabels: (claim.evaluation?.missingDimensions ?? []).map((slot) => SLOT_LABELS[slot - 1] ?? `항목 ${slot}`),
     uncertaintyLabels: (claim.evaluation?.uncertaintyCodes ?? []).map(reasonLabel),
+    stanceSummary: claim.evaluation
+      ? STANCE_SUMMARY.map(([key, label, field]) => ({
+        key,
+        label,
+        count: claim.evaluation![field].length,
+      })).filter((item) => item.count > 0)
+      : [],
     bucketEvidence: claim.evaluation ? {
       support: claim.evaluation.supportEvidenceIds.map((id) => evidenceById.get(id)).filter(Boolean),
       oppose: claim.evaluation.opposeEvidenceIds.map((id) => evidenceById.get(id)).filter(Boolean),
@@ -217,6 +264,11 @@ export function buildReviewResultView(result: ReviewResult) {
     claims,
     summaryCounts,
     evidence,
+    evidenceGroups,
+    claimEvidence,
+    contextEvidence,
+    claimEvidenceGroups,
+    contextEvidenceGroups,
     numericChecks,
     findings: result.findings.map((finding) => ({
       ...finding, kindLabel: FINDING_LABELS[finding.kind], slotLabel: SLOT_LABELS[finding.slotId - 1] ?? `항목 ${finding.slotId}`,

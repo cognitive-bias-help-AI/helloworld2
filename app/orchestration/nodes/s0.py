@@ -109,6 +109,38 @@ from app.schemas.frozen import (
 _INCREASE_TERMS = ("증가", "상승", "오름", "늘", "개선", "increase", "increased", "rise", "rising", "up")
 _DECREASE_TERMS = ("감소", "하락", "내림", "줄", "악화", "decrease", "decreased", "fall", "falling", "down")
 _NEGATION_TERMS = ("않", "안 ", "못", "없", "not", "never", "didn't", "doesn't")
+_FALLBACK_EVIDENCE_CATEGORIES = {
+    EvidenceNeed.FINANCIAL_STATEMENT: EvidenceCategory.FINANCIAL_PERFORMANCE,
+    EvidenceNeed.DISCLOSURE: EvidenceCategory.DISCLOSURE_EVENT,
+    EvidenceNeed.NEWS: EvidenceCategory.NEWS_EVENT,
+    EvidenceNeed.MARKET_PRICE: EvidenceCategory.PRICE_MOVEMENT,
+    EvidenceNeed.INVESTOR_FLOW: EvidenceCategory.INVESTOR_FLOW,
+}
+
+
+def _minimum_evidence_intent(need: EvidenceNeed, text: str) -> EvidenceIntentDraft:
+    """Keep one safe category when N5 returns an empty intent."""
+
+    category = _FALLBACK_EVIDENCE_CATEGORIES.get(need)
+    if need is EvidenceNeed.FINANCIAL_INDICATOR:
+        category = (
+            EvidenceCategory.PROFITABILITY
+            if any(term in text for term in ("ROE", "ROA", "수익성"))
+            else EvidenceCategory.FINANCIAL_STABILITY
+            if any(term in text for term in ("부채비율", "안정성"))
+            else EvidenceCategory.FINANCIAL_GROWTH
+            if "성장성" in text
+            else EvidenceCategory.OPERATING_EFFICIENCY
+            if any(term in text for term in ("회전율", "활동성"))
+            else None
+        )
+    return EvidenceIntentDraft(
+        requirements=(
+            [EvidenceRequirementDraft(category=category)]
+            if category is not None
+            else []
+        )
+    )
 
 
 def _claim_direction(claim: Claim) -> str | None:
@@ -587,13 +619,6 @@ def make_nodes(deps: RuntimeDeps):
         llm_calls = 0
         source_limited_claims = 0
         missing_user_fact_claims = 0
-        fallback_categories = {
-            EvidenceNeed.FINANCIAL_STATEMENT: EvidenceCategory.FINANCIAL_PERFORMANCE,
-            EvidenceNeed.DISCLOSURE: EvidenceCategory.DISCLOSURE_EVENT,
-            EvidenceNeed.NEWS: EvidenceCategory.NEWS_EVENT,
-            EvidenceNeed.MARKET_PRICE: EvidenceCategory.PRICE_MOVEMENT,
-            EvidenceNeed.INVESTOR_FLOW: EvidenceCategory.INVESTOR_FLOW,
-        }
         for claim in claims:
             if not claim.verifiable:
                 continue
@@ -618,27 +643,9 @@ def make_nodes(deps: RuntimeDeps):
                     break
                 except (AssertionError, KeyError, RuntimeError, ValueError, ValidationError):
                     llm_calls += 1
-            if intent_draft is None:
-                category = fallback_categories.get(need)
-                if need is EvidenceNeed.FINANCIAL_INDICATOR:
-                    text = claim.normalized_proposition
-                    category = (
-                        EvidenceCategory.PROFITABILITY
-                        if any(term in text for term in ("ROE", "ROA", "수익성"))
-                        else EvidenceCategory.FINANCIAL_STABILITY
-                        if any(term in text for term in ("부채비율", "안정성"))
-                        else EvidenceCategory.FINANCIAL_GROWTH
-                        if "성장성" in text
-                        else EvidenceCategory.OPERATING_EFFICIENCY
-                        if any(term in text for term in ("회전율", "활동성"))
-                        else None
-                    )
-                intent_draft = EvidenceIntentDraft(
-                    requirements=(
-                        [EvidenceRequirementDraft(category=category)]
-                        if category is not None
-                        else []
-                    )
+            if intent_draft is None or not intent_draft.requirements:
+                intent_draft = _minimum_evidence_intent(
+                    need, claim.normalized_proposition
                 )
             debug_log(
                 "n5",
